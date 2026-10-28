@@ -9,3 +9,6 @@ coverage.out
 # local deployment config
 /deploy/config.json
 .playwright-mcp/
+
+# local planning notes
+plan/
