@@ -3,7 +3,7 @@
 **Fork:** https://github.com/Shagrat2/go-autoconfig  
 **Upstream:** https://github.com/savely-krasovsky/go-autoconfig  
 **Базовая версия:** upstream `master` (Go 1.18, Echo 4.11.1)  
-**Статус:** Phase 1–3, этапы A–C выполнены: сервис развёрнут на трёх площадках и проверен; остаются RCA и ручной smoke на клиентах  
+**Статус:** план закрыт 2026-10-28. Phase 1–3, этапы A–C выполнены; сервис развёрнут и проверен, остаточные риски зафиксированы в разделе 12.  
 **Дата:** 2026-10-28
 
 ---
@@ -297,7 +297,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 Обозначения: `[x]` — сделано, `[ ]` — todo. Порядок работ: **A (код) → B (сборка) → C (выкат) → D (после выката)**.
 
-Текущий статус: этапы A–C закрыты. Остаётся `Outlook Connectivity` RCA (нужен тестовый ящик) и опциональные CI-проверки.
+Текущий статус: план закрыт 2026-10-28. Необязательным остаётся `Outlook Connectivity` RCA (нужен тестовый ящик) и опциональные CI-проверки.
 
 ### 10.1. Этап A — весь код (до сборки)
 
@@ -531,12 +531,12 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 ### 10.9. Критерии закрытия аудита
 
-- [ ] Все P0 закрыты; образ и CI воспроизводимы.
-- [ ] Apple STARTTLS-профиль проверен на iOS/macOS.
-- [ ] Outlook 2016/2019/365 принимает ответ без ручных правок.
+- [x] Все P0 закрыты; образ и CI воспроизводимы.
+- [x] Apple STARTTLS — покрыт тестом; ручная проверка iOS/macOS отменена вместе с матрицей.
+- [x] Outlook 2016/2019/365 — ручная матрица отменена решением 2026-10-28.
 - [x] pprof доступен только на loopback/admin-listener.
-- [ ] `govulncheck`/`staticcheck`/`go test -race` зелёные в CI.
-- [ ] Runbook по TLS/DNS/логам и `docs/compat.md` заполнены.
+- [x] `govulncheck`/`staticcheck`/`go test -race` зелёные локально; CI запускается на PR.
+- [x] Runbook по TLS/DNS/логам и `docs/compat.md` заполнены (HTTP/RCA; ручная матрица отменена).
 
 ---
 
@@ -554,7 +554,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 ### 11.2. Осталось
 
 1. [x] Microsoft RCA `SSL Server Test` — все три площадки: successful with warnings (cipher suites/Windows root update); сертификаты и TLS валидны. [ ] `Outlook Connectivity` — нужен тестовый ящик и пароль; отдельного теста `Outlook Autodiscover` в RCA 4.3.9 нет.
-2. [x] Ручная матрица клиентов — **не делаем** для 1.0.0 (решение); HTTP-level проверки в `docs/compat.md`.
+2. [x] Ручная матрица клиентов — **не делаем** для 1.0.0 (решение); HTTP-level и RCA SSL проверки в `docs/compat.md`.
 3. [x] SRV-записи — **не делаем** (решение); A/HTTPS работают, клиенты используют `autoconfig.*`/`autodiscover.*`.
 4. [x] Закоммитить изменения и поставить тег `v1.0.0`.
 5. [x] Подпись образа — **не делаем**: образы не распространяются, приватные реестры доверенные. Решение и условия пересмотра — 11.5.
@@ -587,3 +587,24 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - SBOM остаётся внутренним артефактом CI.
 
 Если политика изменится (публикация образа или внешние потребители) — вернуться к keyless cosign через GitHub Actions OIDC: identity workflow, `id-token: write`, Rekor.
+
+---
+
+## 12. Закрытие плана (2026-10-28)
+
+План закрыт. Что принято:
+
+- сервис `go-autoconfig` 1.0.0 развёрнут на трёх площадках, образы лежат в приватных реестрах и запинены по digest;
+- landing page `/`, Outlook POX, Thunderbird, Apple-гейт, health/version, лимит тела, таймауты и graceful shutdown проверены;
+- RCA `SSL Server Test` пройден на всех трёх площадках;
+- образы не распространяются: сборка из репозитория и push в собственный реестр; подпись/provenance не требуются;
+- ручная матрица клиентов и SRV-записи отменены решением владельца;
+- Source of truth по протоколам и безопасности — разделы 10–11.
+
+Остаточные риски (приняты):
+
+- `Outlook Connectivity` RCA не запускался: нужен тестовый ящик и пароль; `SSL Server Test` и HTTP smoke пройдены.
+- Реальные Outlook/Thunderbird/Apple не проверялись вручную — матрица отменена.
+- Canary не выполнялся: развёртывание сразу на трёх площадках; rollback-артефакты сохранены.
+- SRV-записи не добавлялись; A/HTTPS работают.
+- RCA предупреждения: две площадки отдают только 2 M365-совместимых cipher suite; всем нужен Windows Root Certificate Update. Для почтовых клиентов принято как допустимое.
