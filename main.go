@@ -1,17 +1,22 @@
-package main // import "go-autoconfig"
+package main
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
+	"log/slog"
+	"net/http"
+	"net/http/pprof"
 	"os"
-	"path/filepath"
-	"text/template"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"go-autoconfig/config"
-	"go-autoconfig/handlers"
+	"github.com/Shagrat2/go-autoconfig/config"
+	"github.com/Shagrat2/go-autoconfig/handlers"
 )
 
 var path = flag.String(
@@ -21,42 +26,171 @@ var path = flag.String(
 )
 
 func main() {
-	// Parse at first startup
 	flag.Parse()
 
-	// Read config
+	if err := run(); err != nil {
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	conf, err := config.NewConfig(*path)
 	if err != nil {
-		fmt.Printf("Incorrect path or config itself! See help.\n%s\n", err.Error())
-		os.Exit(2)
+		return err
+	}
+	if listen := os.Getenv("AUTOCONFIG_LISTEN"); listen != "" {
+		conf.Listen = listen
+	}
+	if pprofListen := os.Getenv("AUTOCONFIG_PPROF"); pprofListen != "" {
+		if pprofListen == "1" {
+			pprofListen = "127.0.0.1:6060"
+		}
+		conf.PprofListen = pprofListen
+	}
+	if err := conf.Validate(); err != nil {
+		return err
 	}
 
-	tmpl := &Template{
-		templates: template.Must(template.ParseGlob(filepath.Join("templates", "*.tmpl"))),
+	srv := &http.Server{
+		Addr:              conf.Listen,
+		Handler:           logging(recoverPanics(handlers.NewRouter(conf))),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 
-	// Init Echo
-	e := echo.New()
-	e.Renderer = tmpl
+	servers := []*http.Server{srv}
+	if conf.PprofListen != "" {
+		pprofSrv := newPprofServer(conf.PprofListen)
+		servers = append(servers, pprofSrv)
 
-	// Middleware
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+		go func() {
+			slog.Info("pprof started", "listen", conf.PprofListen)
+			if err := pprofSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("pprof server failed", "error", err)
+			}
+		}()
+	}
 
-	// Routes
-	h := handlers.Handler{conf}
-	e.POST("/autodiscover/autodiscover.xml", h.Outlook)
-	e.GET("/mail/config-v1.1.xml", h.Thunderbird)
-	e.GET("/email.mobileconfig", h.AppleMail)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// Start server
-	e.Logger.Fatal(e.Start(conf.ServiceAddr))
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("server started", "listen", conf.Listen)
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+
+		return err
+	case <-ctx.Done():
+		slog.Info("shutting down")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, s := range servers {
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown %s: %w", s.Addr, err)
+		}
+	}
+
+	return nil
 }
 
-type Template struct {
-	templates *template.Template
+func newPprofServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 }
 
-func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
-	return t.templates.ExecuteTemplate(w, name, data)
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+
+	return r.ResponseWriter.Write(b)
+}
+
+func logging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		id := requestID(r)
+		w.Header().Set("X-Request-ID", id)
+
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		slog.Info("request",
+			"request_id", id,
+			"method", r.Method,
+			"host", r.Host,
+			"path", r.URL.Path,
+			"status", status,
+			"duration", time.Since(start),
+		)
+	})
+}
+
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic recovered", "error", rec, "path", r.URL.Path)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requestID(r *http.Request) string {
+	if id := r.Header.Get("X-Request-ID"); id != "" {
+		return id
+	}
+
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+
+	return hex.EncodeToString(b[:])
 }

@@ -2,119 +2,174 @@ package handlers
 
 import (
 	"encoding/xml"
-	"io/ioutil"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"strings"
 
-	"github.com/labstack/echo/v4"
-	"go-autoconfig/config"
+	"github.com/Shagrat2/go-autoconfig/config"
 )
+
+const maxBodyBytes = 1 << 20
 
 type Handler struct {
 	Config *config.Config
 }
 
-type server struct {
-	Host     string
-	Port     int
-	STARTTLS bool
+func NewRouter(c *config.Config) http.Handler {
+	h := &Handler{Config: c}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /autodiscover/autodiscover.xml", h.Outlook)
+	mux.HandleFunc("GET /autodiscover/autodiscover.xml", h.Outlook)
+	mux.HandleFunc("GET /mail/config-v1.1.xml", h.Thunderbird)
+	mux.HandleFunc("GET /.well-known/autoconfig/mail/config-v1.1.xml", h.Thunderbird)
+	mux.HandleFunc("GET /healthz", h.Health)
+	if c.EnableApple {
+		mux.HandleFunc("GET /email.mobileconfig", h.AppleMail)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, ok := canonicalPath(r.URL.Path); ok {
+			r.URL.Path = p
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
-func (h *Handler) Outlook(ctx echo.Context) error {
+var routes = []string{
+	"/autodiscover/autodiscover.xml",
+	"/mail/config-v1.1.xml",
+	"/.well-known/autoconfig/mail/config-v1.1.xml",
+	"/email.mobileconfig",
+	"/healthz",
+}
+
+func canonicalPath(p string) (string, bool) {
+	for _, route := range routes {
+		if strings.EqualFold(p, route) {
+			return route, true
+		}
+	}
+
+	return "", false
+}
+
+func (h *Handler) Outlook(w http.ResponseWriter, r *http.Request) {
+	domain, d, ok := h.domain(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
 	var req struct {
 		XMLName xml.Name `xml:"Autodiscover"`
-		Text    string   `xml:",chardata"`
-		Xmlns   string   `xml:"xmlns,attr"`
 		Request struct {
-			Text                     string `xml:",chardata"`
 			EMailAddress             string `xml:"EMailAddress"`
 			AcceptableResponseSchema string `xml:"AcceptableResponseSchema"`
 		} `xml:"Request"`
 	}
 
-	b, err := ioutil.ReadAll(ctx.Request().Body)
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		http.Error(w, "cannot read request body", http.StatusBadRequest)
+		return
 	}
 
 	if err := xml.Unmarshal(b, &req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
 
-	data := struct {
-		Schema string
-		Email  string
-		Domain string
-		IMAP   *server
-		SMTP   *server
-	}{
-		Schema: req.Request.AcceptableResponseSchema,
-		Email:  req.Request.EMailAddress,
-		Domain: h.Config.Domain,
-		IMAP: &server{
-			Host:     h.Config.IMAP.Host,
-			Port:     h.Config.IMAP.Port,
-			STARTTLS: h.Config.IMAP.STARTTLS,
-		},
-		SMTP: &server{
-			Host:     h.Config.SMTP.Host,
-			Port:     h.Config.SMTP.Port,
-			STARTTLS: h.Config.SMTP.STARTTLS,
-		},
+	out, err := marshalXML(buildAutodiscover(d, domain, req.Request.EMailAddress, req.Request.AcceptableResponseSchema))
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	ctx.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXMLCharsetUTF8)
-	return ctx.Render(http.StatusOK, "outlook", data)
+	writeXML(w, out)
 }
 
-func (h *Handler) Thunderbird(ctx echo.Context) error {
-	data := struct {
-		Domain string
-		IMAP   *server
-		SMTP   *server
-	}{
-		Domain: h.Config.Domain,
-		IMAP: &server{
-			Host:     h.Config.IMAP.Host,
-			Port:     h.Config.IMAP.Port,
-			STARTTLS: h.Config.IMAP.STARTTLS,
-		},
-		SMTP: &server{
-			Host:     h.Config.SMTP.Host,
-			Port:     h.Config.SMTP.Port,
-			STARTTLS: h.Config.SMTP.STARTTLS,
-		},
+func (h *Handler) Thunderbird(w http.ResponseWriter, r *http.Request) {
+	domain, d, ok := h.domain(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
 
-	ctx.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXMLCharsetUTF8)
-	return ctx.Render(http.StatusOK, "thunderbird", data)
+	out, err := marshalXML(buildClientConfig(d, domain))
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeXML(w, out)
 }
 
-func (h *Handler) AppleMail(ctx echo.Context) error {
-	var req struct {
-		Email string `query:"email"`
-	}
-	if err := ctx.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-
-	data := struct {
-		Email  string
-		Domain string
-		IMAP   *server
-		SMTP   *server
-	}{
-		Email:  req.Email,
-		Domain: h.Config.Domain,
-		IMAP: &server{
-			Host: h.Config.IMAP.Host,
-			Port: h.Config.IMAP.Port,
-		},
-		SMTP: &server{
-			Host: h.Config.SMTP.Host,
-			Port: h.Config.SMTP.Port,
-		},
+func (h *Handler) AppleMail(w http.ResponseWriter, r *http.Request) {
+	domain, d, ok := h.domain(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
 
-	ctx.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXMLCharsetUTF8)
-	return ctx.Render(http.StatusOK, "applemail", data)
+	out, err := marshalPlist(buildAppleProfile(d, domain))
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+	w.Header().Set("Content-Disposition", `attachment; filename="email.mobileconfig"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
+
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok\n")
+}
+
+func (h *Handler) domain(r *http.Request) (string, config.Domain, bool) {
+	host := hostname(r.Host)
+	if host == "" {
+		return "", config.Domain{}, false
+	}
+
+	for _, prefix := range []string{"autodiscover.", "autoconfig."} {
+		if name, ok := strings.CutPrefix(host, prefix); ok {
+			if d, found := h.Config.Domains[name]; found {
+				return name, d, true
+			}
+		}
+	}
+
+	d, ok := h.Config.Domains[host]
+
+	return host, d, ok
+}
+
+func hostname(hostport string) string {
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		hostport = host
+	}
+	hostport = strings.Trim(strings.TrimSuffix(hostport, "."), "[]")
+
+	return strings.ToLower(hostport)
+}
+
+func writeXML(w http.ResponseWriter, out []byte) {
+	w.Header().Set("Content-Type", "application/xml; charset=UTF-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
 }

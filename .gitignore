@@ -1,5 +1,2 @@
 # jetbrains goland
 .idea
-
-# go modules
-go.sum

@@ -1,0 +1,19 @@
+{
+  "listen": ":8080",
+  "pprof_listen": "",
+  "enable_apple": false,
+  "domains": {
+    "example.com": {
+      "imap": {
+        "host": "imap.example.com",
+        "port": 993,
+        "starttls": false
+      },
+      "smtp": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "starttls": true
+      }
+    }
+  }
+}

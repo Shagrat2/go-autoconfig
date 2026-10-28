@@ -1,42 +1,142 @@
 package config
 
 import (
-	"io/ioutil"
-
-	"gopkg.in/go-playground/validator.v9"
-	"gopkg.in/yaml.v2"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strings"
 )
 
 type Config struct {
-	ServiceAddr string `yaml:"service_addr"`
+	Listen      string            `json:"listen"`
+	PprofListen string            `json:"pprof_listen"`
+	EnableApple bool              `json:"enable_apple"`
+	Domains     map[string]Domain `json:"domains"`
+}
 
-	Domain string `yaml:"domain" validate:"required"`
-
-	IMAP *Server `yaml:"imap"`
-	SMTP *Server `yaml:"smtp"`
+type Domain struct {
+	IMAP Server `json:"imap"`
+	SMTP Server `json:"smtp"`
 }
 
 type Server struct {
-	Host     string `yaml:"server" validate:"required"`
-	Port     int    `yaml:"port" validate:"required"`
-	STARTTLS bool   `yaml:"starttls"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	STARTTLS bool   `json:"starttls"`
 }
 
 func NewConfig(p string) (*Config, error) {
-	b, err := ioutil.ReadFile(p)
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
 
 	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return nil, err
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("config: unexpected data after JSON object")
+	}
 
-	validate := validator.New()
-	if err := validate.Struct(c); err != nil {
+	if err := c.normalize(); err != nil {
 		return nil, err
 	}
 
 	return &c, nil
+}
+
+func (c *Config) Validate() error {
+	return c.normalize()
+}
+
+func (c *Config) normalize() error {
+	if c.Listen == "" {
+		c.Listen = ":8080"
+	}
+	if strings.TrimSpace(c.Listen) != c.Listen || strings.ContainsAny(c.Listen, " \t\r\n") {
+		return fmt.Errorf("config: listen address %q contains whitespace", c.Listen)
+	}
+
+	if c.PprofListen != "" {
+		if err := validatePprofListen(c.PprofListen); err != nil {
+			return err
+		}
+	}
+
+	if len(c.Domains) == 0 {
+		return fmt.Errorf("config: at least one domain is required")
+	}
+
+	domains := make(map[string]Domain, len(c.Domains))
+	for name, d := range c.Domains {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if !validDomainName(key) {
+			return fmt.Errorf("config: invalid domain %q", name)
+		}
+		if _, ok := domains[key]; ok {
+			return fmt.Errorf("config: duplicate domain %q", key)
+		}
+		if err := validateServer("imap", d.IMAP); err != nil {
+			return fmt.Errorf("config: domain %q: %w", key, err)
+		}
+		if err := validateServer("smtp", d.SMTP); err != nil {
+			return fmt.Errorf("config: domain %q: %w", key, err)
+		}
+		domains[key] = d
+	}
+	c.Domains = domains
+
+	return nil
+}
+
+func validatePprofListen(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("config: pprof_listen %q: %w", addr, err)
+	}
+
+	if host == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("config: pprof_listen must bind to loopback, got %q", addr)
+	}
+
+	return nil
+}
+
+func validDomainName(name string) bool {
+	if name == "" || len(name) > 253 || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
+		return false
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func validateServer(kind string, s Server) error {
+	if s.Host == "" || strings.TrimSpace(s.Host) != s.Host || strings.ContainsAny(s.Host, " \t\r\n/:") {
+		return fmt.Errorf("%s: invalid host %q", kind, s.Host)
+	}
+	if s.Port < 1 || s.Port > 65535 {
+		return fmt.Errorf("%s: port %d out of range 1..65535", kind, s.Port)
+	}
+
+	return nil
 }
