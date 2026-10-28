@@ -19,6 +19,16 @@ Passed on every site: `GET /` (landing page with manual settings), `GET /healthz
 
 Real clients, RCA and TLS/DNS acceptance remain below.
 
+## Microsoft RCA (2026-10-28)
+
+`SSL Server Test` (доступен без учётных данных ящика) для трёх `autoconfig.*` endpoint-ов:
+
+- все три: **Connectivity Test Successful with Warnings**, сертификат валиден и доверен, имя/сроки ОК, современные TLS-протоколы;
+- две площадки: предупреждение «only 2 cipher suites compatible with Microsoft 365 services» (`TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`, `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`) — для почтовых клиентов достаточно;
+- все три: предупреждение о цепочке, которой нужен Windows Root Certificate Update; на поддерживаемых Windows это штатно.
+
+`Outlook Connectivity` не запускался: RCA требует рабочий email, `Domain\User`/UPN, пароль и капчу. Отдельного теста «Outlook Autodiscover» в RCA 4.3.9 нет — Autodiscover входит в `Outlook Connectivity`.
+
 ## Matrix
 
 | # | Client | OS | Scenario | Expected | Actual | Status |

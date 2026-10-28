@@ -553,11 +553,11 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 ### 11.2. Осталось
 
-1. [ ] Microsoft RCA (Outlook Autodiscover + Outlook Connectivity) — внешняя проверка со стороны Microsoft.
+1. [x] Microsoft RCA `SSL Server Test` — все три площадки: successful with warnings (cipher suites/Windows root update); сертификаты и TLS валидны. [ ] `Outlook Connectivity` — нужен тестовый ящик и пароль; отдельного теста `Outlook Autodiscover` в RCA 4.3.9 нет.
 2. [x] Ручная матрица клиентов — **не делаем** для 1.0.0 (решение); HTTP-level проверки в `docs/compat.md`.
 3. [x] SRV-записи — **не делаем** (решение); A/HTTPS работают, клиенты используют `autoconfig.*`/`autodiscover.*`.
 4. [x] Закоммитить изменения и поставить тег `v1.0.0`.
-5. [ ] Подпись образа: keyless cosign через GitHub Actions OIDC (identity = workflow/org), либо ключ в CI-секрете. Требует `id-token: write` и поддержки OCI-подписей реестром.
+5. [ ] Подпись образа: keyless cosign через GitHub Actions OIDC (identity = workflow/org), либо ключ в CI-секрете. Требует `id-token: write` и поддержки OCI-подписей реестром. Подробнее — 11.5.
 6. [x] Autodiscover v2 JSON — исследовано: официальной публичной схемы нет; v2 возвращает только URL для EWS/ActiveSync, IMAP/SMTP остаются в v1. Не реализуем (см. 11.4).
 7. [ ] CI XSD-профиль, nightly DNS/SRV/TLS; метрики/retention, hot reload — опционально.
 8. [x] Canary не выполнялся: развёртывание сразу на трёх площадках; rollback-артефакты сохранены.
@@ -575,3 +575,16 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
   - <https://learn.microsoft.com/en-us/answers/questions/5646358/does-outlook-classic-support-autodiscover-v2-i-m-c>
   - <https://docs.grommunio.com/man/autodiscover.7.html> (third-party, пример формата)
 - Решение: для IMAP/SMTP v2 JSON не реализуем; POX v1 покрывает Outlook desktop. Если появится официальный контракт для IMAP — вернуться к пункту.
+
+### 11.5. Подпись образа: кем и зачем
+
+**Кем:** release-workflow GitHub Actions через keyless cosign (OIDC). Идентичность подписи — не человек, а workflow: `https://github.com/<org>/<repo>/.github/workflows/release.yml@refs/tags/v1.0.0`, issuer `https://token.actions.githubusercontent.com`. Сертификат короткоживущий, подпись фиксируется в Rekor. Альтернатива — cosign-ключ в CI-секрете/KMS: тогда identity = ключ, ротация и хранение на вас.
+
+**Зачем:**
+
+- доказать, что образ собран из этого репозитория/коммита, а не подменён в реестре;
+- admission policy (Kyverno/OPA/Gatekeeper) может отклонять неподписанные образы;
+- аудит цепочки поставки вместе с SBOM и provenance;
+- если утекут push-креды реестра, без CI-идентичности нельзя выпустить валидную подпись.
+
+**Требования:** `permissions: id-token: write`, push в реестр, поддержка OCI-подписей (для Docker Registry 3.0 проверить; иначе legacy tag-схема cosign или подпись артефактов в GitHub Release).

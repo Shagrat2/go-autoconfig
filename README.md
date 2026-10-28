@@ -3,7 +3,7 @@ IMAP/SMTP autodiscover feature for Thunderbird, Apple Mail and Microsoft Outlook
 
 ## Status
 
-Release `1.0.0` (linux/amd64, digest-pinned) is deployed and verified at the HTTP level on three independent sites: landing page, health/version, Thunderbird, Outlook POX, Apple-disabled, headers, unknown schema/host and the 1 MiB body limit. Remaining acceptance: Microsoft RCA and the real-client matrix in [docs/compat.md](docs/compat.md).
+Release `1.0.0` (linux/amd64, digest-pinned) is deployed and verified at the HTTP level on three independent sites: landing page, health/version, Thunderbird, Outlook POX, Apple-disabled, headers, unknown schema/host and the 1 MiB body limit. Microsoft RCA `SSL Server Test` passed on all three sites; `Outlook Connectivity` still needs a test mailbox password. Details: [docs/compat.md](docs/compat.md).
 
 DNS SRV records are recommended, but clients also try the `autoconfig.`/`autodiscover.` hosts directly:
 ```
