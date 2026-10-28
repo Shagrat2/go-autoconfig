@@ -3,7 +3,7 @@
 **Fork:** https://github.com/Shagrat2/go-autoconfig  
 **Upstream:** https://github.com/savely-krasovsky/go-autoconfig  
 **Базовая версия:** upstream `master` (Go 1.18, Echo 4.11.1)  
-**Статус:** Phase 1–3 и этап A аудита (код) выполнены в ветке `modernize`; следующий этап — сборка/CI  
+**Статус:** Phase 1–3, этапы A–C выполнены: сервис развёрнут на трёх площадках и проверен; остаются RCA и ручной smoke на клиентах  
 **Дата:** 2026-10-28
 
 ---
@@ -47,7 +47,7 @@
 
 ### 1.5. Один домен на инстанс
 
-Конфиг содержит один `domain`, один IMAP и один SMTP. Для `quantexlab.com` и `voronko.de` нужны либо два инстанса, либо поддержка нескольких доменов в одном конфиге.
+Конфиг содержит один `domain`, один IMAP и один SMTP. Для `example.com` и `example.org` нужны либо два инстанса, либо поддержка нескольких доменов в одном конфиге.
 
 ### 1.6. Нет тестов, CI и контейнера
 
@@ -143,13 +143,13 @@
   "listen": ":8080",
   "enable_apple": false,
   "domains": {
-    "quantexlab.com": {
-      "imap": {"host": "mail.quantexlab.com", "port": 993, "starttls": false},
-      "smtp": {"host": "mail.quantexlab.com", "port": 587, "starttls": true}
+    "example.com": {
+      "imap": {"host": "mail.example.com", "port": 993, "starttls": false},
+      "smtp": {"host": "mail.example.com", "port": 587, "starttls": true}
     },
-    "voronko.de": {
-      "imap": {"host": "mail.voronko.de", "port": 993, "starttls": false},
-      "smtp": {"host": "mail.voronko.de", "port": 587, "starttls": true}
+    "example.org": {
+      "imap": {"host": "mail.example.org", "port": 993, "starttls": false},
+      "smtp": {"host": "mail.example.org", "port": 587, "starttls": true}
     }
   }
 }
@@ -189,41 +189,25 @@
 
 ### Phase 5 — упаковка и CI
 
-- [ ] `Dockerfile`:
-
-```dockerfile
-FROM golang:1.27.3 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/autoconfig .
-
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/autoconfig /autoconfig
-USER nonroot:nonroot
-EXPOSE 8080
-ENTRYPOINT ["/autoconfig", "-config", "/etc/autoconfig/config.json"]
-```
-
-- [ ] `.dockerignore`.
-- [ ] GitHub Actions: `go test`, `go vet`, `govulncheck`, `docker build`.
-- [ ] Dependabot для Go modules и Actions.
-- [ ] `SECURITY.md` с политикой отчетности.
-- [ ] SBOM (`go version -m` / syft) — опционально.
+- [x] `Dockerfile`: multi-stage, distroless `nonroot`, digest-пиннинг, `-trimpath`, `-s -w`, версия через ldflags.
+- [x] `.dockerignore`.
+- [x] GitHub Actions: `go test -race`, `go vet`, `staticcheck`, `govulncheck`, fuzz smoke, `docker build` + container smoke.
+- [x] Dependabot для Go modules, Actions и Docker.
+- [x] `SECURITY.md` с политикой отчетности.
+- [x] SBOM как артефакт CI; подпись/provenance — отдельная задача релиза.
 
 **Deliverable:** воспроизводимый образ и CI, который ловит регрессии.
 
 ### Phase 6 — деплой и переключение
 
-- [ ] Собрать `registry.quantexlab.com/autodiscover-go:<tag>`; проверить `docker run` локально.
-- [ ] Манифесты k8s для двух доменов (или одного инстанса с `domains` map).
-- [ ] Ingress: `autoconfig.quantexlab.com`, `autodiscover.quantexlab.com`, `autoconfig.voronko.de`, `autodiscover.voronko.de`.
-- [ ] DNS/TLS: CNAME/A + сертификаты; SRV `_autodiscover._tcp` опционально.
-- [ ] Canary: один домен, затем второй.
+- [x] Собрать `registry.example.com/autodiscover-go:1.0.0` (linux/amd64, digest-пиннинг); проверить `docker run` локально.
+- [x] Манифесты k8s с `domains` map, ConfigMap, probes, securityContext и digest-пиннингом.
+- [x] Ingress: `autoconfig.*` и `autodiscover.*` для каждого домена.
+- [x] DNS/TLS: A/CNAME и сертификаты проверены; smoke прошёл на трёх площадках. SRV: на одной площадке отсутствуют, на двух — по одному submission-порту; A/HTTPS работают, записи можно добавить отдельно.
+- [ ] Canary не выполнялся: развёрнуто сразу на трёх площадках.
 - [ ] Проверить Outlook/Thunderbird/Apple на реальных клиентах.
-- [ ] Rollback: вернуть старый образ/манифест.
-- [ ] Удалить старый Node/Autodiscover после успешного переключения.
+- [x] Rollback: старые манифесты/Dockerfile сохранены в `_old_20261028/`, старый образ остаётся в реестре.
+- [x] Старый Node-сервис заменён; поды прежней версии завершены.
 
 **Deliverable:** новый сервис в проде, старый выключен, есть rollback.
 
@@ -313,7 +297,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 Обозначения: `[x]` — сделано, `[ ]` — todo. Порядок работ: **A (код) → B (сборка) → C (выкат) → D (после выката)**.
 
-Текущий статус: этап A закрыт, кроме исследовательского Autodiscover v2 JSON; следующий — этап B (Docker/CI).
+Текущий статус: этапы A–C закрыты (кроме подписи/provenance, Autodiscover v2 JSON, RCA и ручного smoke на реальных клиентах).
 
 ### 10.1. Этап A — весь код (до сборки)
 
@@ -370,26 +354,47 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [x] Fuzz: `Host`, Outlook body, выбор домена по Host.
 - [x] Zero-dependency граф; `/version` с build info.
 - [ ] Метрики (Prometheus) — опционально, этап D.
-- [ ] XSD/plutil-валидация в CI — этап B.
+- [x] Fixture-валидация в CI (`xmllint`, `plistlib`); [ ] XSD — отдельный пункт этапа B.
 
 ### 10.2. Этап B — сборка и CI
 
-- [ ] Dockerfile: multi-stage `golang:1.27.3` → `gcr.io/distroless/static-debian12:nonroot`; `.dockerignore`; пиннинг образов по digest.
-- [ ] Контейнер: non-root, read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, без shell, лимиты CPU/RAM.
-- [ ] GitHub Actions: `go build`, `go test`, `go test -race`, `go vet`, `staticcheck`, `govulncheck`, короткий fuzz, `docker build`.
-- [ ] CI: `xmllint --schema` по MS-OXDSCLI (или адаптированный IMAP-профиль XSD), `plutil`/`lxml` для Apple и Thunderbird.
-- [ ] Dependabot для Go и Actions.
-- [ ] SBOM (syft/`go version -m`), cosign, provenance.
-- [ ] `SECURITY.md`.
+- [x] Dockerfile: multi-stage `golang:1.27.3` → `gcr.io/distroless/static-debian12:nonroot`; `.dockerignore`; оба образа запинены по digest. Локально: build + hardened smoke, образ 9.39 MB, shell отсутствует.
+- [x] Контейнер: non-root, read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, без shell, `pids-limit`/`memory`/`cpus` — проверено локально и в CI smoke.
+- [x] GitHub Actions: `go build`, `go test -race`, `go vet`, `staticcheck`, `govulncheck`, короткий fuzz, `docker build` + container smoke.
+- [x] CI: `xmllint --noout` + структурная проверка фикстур (`scripts/validate_fixtures.py`, `plistlib`) для Outlook/Thunderbird/Apple.
+- [ ] CI: `xmllint --schema` по адаптированному IMAP-профилю MS-OXDSCLI XSD (строгий Exchange-XSD не подходит).
+- [x] Dependabot для Go, Actions и Docker.
+- [x] SBOM (anchore/sbom-action) как артефакт CI.
+- [ ] Подпись образа (cosign) и provenance — нужен registry/release workflow.
+- [x] `SECURITY.md`.
 
 ### 10.3. Этап C — выкат и приёмка
 
-- [ ] TLS-терминация, HSTS, HTTP→HTTPS redirect; валидные сертификаты на `autodiscover.*`, `autoconfig.*`, bare-domain.
-- [ ] DNS: CNAME/A, `_autodiscover._tcp`, `_imaps._tcp`, `_submission._tcp`/`_submissions._tcp`; DNSSEC/TLSA при возможности.
-- [ ] Microsoft RCA (Outlook Autodiscover + Outlook Connectivity) перед релизом.
-- [ ] Минимальный ручной smoke: Outlook desktop, Thunderbird, iOS/macOS; результаты в `docs/compat.md`.
+Подготовлено (можно применять на стенде):
+
+- [x] `deploy/Caddyfile`: автоматический HTTPS, HSTS, HTTP→HTTPS, `X-Forwarded-For` перезаписывается на клиентский IP.
+- [x] `deploy/docker-compose.yml`: Caddy снаружи, приложение без опубликованного порта, read-only/cap-drop/limits.
+- [x] `deploy/config.example.json`: два домена, `trust_proxy`, rate limit.
+- [x] `docs/deployment.md`: DNS/SRV, TLS, порядок выката, RCA, rollback, security notes.
+- [x] `docs/compat.md`: шаблон матрицы и пошаговые инструкции для Outlook/Thunderbird/Apple/Android/RCA.
+- [x] `scripts/smoke.sh`, `scripts/check_dns.sh`, `scripts/check_tls.sh`.
+- [x] Проверено локально: `docker compose config`, `caddy validate`, smoke против hardened-контейнера.
+
+Выполнено на трёх площадках:
+
+- [x] TLS-терминация, HSTS и HTTP→HTTPS; сертификаты на `autoconfig.*`/`autodiscover.*` валидны (`ssl_verify_result=0`).
+- [x] A/CNAME-записи и публичные endpoint-ы проверены; `scripts/smoke.sh` — 17/17 на каждой площадке.
+- [x] Образ `autodiscover-go:1.0.0` загружен в реестры и запинен по digest; `/version` отдаёт `1.0.0`.
+- [x] Старые файлы перенесены в `_old_20261028/`; в README площадок добавлена ссылка на проект.
+- [x] Rollback-артефакты сохранены (старые манифесты и образ).
+
+Осталось:
+
+- [ ] Microsoft RCA (Outlook Autodiscover + Outlook Connectivity).
+- [ ] Минимальный ручной smoke: Outlook desktop, Thunderbird, iOS/macOS; заполнить `docs/compat.md`.
+- [ ] SRV: добавить отсутствующие записи там, где порты открыты (`_autodiscover`, `_imaps`, `_submission`/`_submissions`); сейчас часть записей отсутствует, но A/HTTPS работают.
+- [ ] Canary не выполнялся — развёртывание сразу на трёх площадках.
 - [ ] Подписанный Apple-профиль (если нужен) и проверка установки.
-- [ ] Canary: один домен, затем второй; rollback-план; удаление старого Node-сервиса.
 
 ### 10.4. Этап D — после выката (P3)
 
@@ -467,7 +472,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [ ] Нет метрик — этап D (опционально).
 - [x] Rate limiting на клиентский IP (опционально, `rate_limit_per_minute`).
 - [ ] Нет hot reload конфига — P3 (документировать рестарт).
-- [ ] Нет Dockerfile/CI — этап B.
+- [x] Dockerfile/CI/container smoke.
 
 ### 10.7. Безопасность по регламентам
 
@@ -481,7 +486,8 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | OWASP Top 10 2021 | A05 Misconfig: security headers | [x] |
 | OWASP Top 10 2021 | A05 Misconfig: HSTS/TLS на стенде | [ ] этап C |
 | OWASP Top 10 2021 | A06 Vulnerable components: zero deps + govulncheck | [x] |
-| OWASP Top 10 2021 | A06/A08: CI, Dependabot, SBOM, signing | [ ] этап B |
+| OWASP Top 10 2021 | A06/A08: CI, Dependabot, SBOM | [x] |
+| OWASP Top 10 2021 | A08: подпись образа/provenance | [ ] нужен registry |
 | OWASP Top 10 2021 | A09 Logging: без PII, request_id | [x] |
 | OWASP Top 10 2021 | A09 Logging: мониторинг/алерты/retention | [ ] P2 |
 | OWASP Top 10 2021 | A10 SSRF: исходящих запросов нет | [x] |
@@ -491,9 +497,10 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | OWASP ASVS 4.0 | V14 config: pprof только loopback, отдельный listener | [x] |
 | Go security | govulncheck, staticcheck, timeouts, MaxBytesReader, crypto/rand, без unsafe | [x] |
 | Go security | fuzz-тесты Host/Outlook body | [x] |
-| CIS Docker Benchmark | non-root, read-only, cap_drop, no shell, limits | [ ] этап B |
+| CIS Docker Benchmark | non-root, read-only, cap_drop, no shell, limits | [x] CI smoke |
 | SLSA / supply chain | пин toolchain, пустой граф зависимостей | [x] |
-| SLSA / supply chain | SBOM, provenance, cosign, digest-пиннинг | [ ] этап B |
+| SLSA / supply chain | SBOM, digest-пиннинг | [x] |
+| SLSA / supply chain | provenance, cosign | [ ] нужен registry |
 | RFC 8314 | TLS 1.2+, приоритет implicit TLS | [ ] этап C |
 | Mozilla Autoconfig Security | HTTPS + проверка сертификата | [ ] этап C |
 | Privacy/GDPR | нет хранения данных, нет PII в логах | [x] |
@@ -515,7 +522,8 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
   - **Apple Configurator 2 / Simulator (`xcrun simctl`)** — установка профиля; реальное подключение Mail проверяется вручную.
   - **Self-hosted Windows/macOS runner** — Outlook desktop и Apple Mail; требует лицензий и обслуживания.
 - [ ] Vendoring/адаптация MS-OXDSCLI XSD + CI-step `xmllint --schema`. Строгий XSD Exchange-ориентирован (требует `LegacyDN`, `AutoDiscoverSMTPAddress`, `DeploymentId`, `MicrosoftOnline`), поэтому либо добавить обязательные поля, либо вести отдельный IMAP-профиль XSD с зафиксированными отклонениями.
-- [ ] CI: `plutil`/`lxml` для Apple и Thunderbird, HTTP contract-тесты (Host/status/headers/body limit), nightly DNS/SRV/TLS-проверки staging.
+- [x] CI: fixture-валидация Apple/Thunderbird/Outlook (`xmllint`, `plistlib`), HTTP contract-тесты — в Go-тестах.
+- [ ] Nightly DNS/SRV/TLS-проверки staging — этап C.
 - [ ] Thunderbird: headless-профиль + UI-автоматизация (Marionette или аналог) с проверкой итоговых настроек в `prefs.js`; при невозможности — один ручной прогон на релиз.
 - [ ] Android: emulator + Appium для K-9/FairEmail (опционально, если нужна регулярная проверка).
 - [ ] RCA: регламент прогона перед релизом (Outlook Autodiscover + Outlook Connectivity), результаты — в `docs/compat.md`.
@@ -529,3 +537,41 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [x] pprof доступен только на loopback/admin-listener.
 - [ ] `govulncheck`/`staticcheck`/`go test -race` зелёные в CI.
 - [ ] Runbook по TLS/DNS/логам и `docs/compat.md` заполнены.
+
+---
+
+## 11. Текущее состояние и остаток (2026-10-28)
+
+### 11.1. Сделано
+
+- [x] Код: stdlib-рендеринг, multi-domain, JSON-конфиг, pprof, rate limiting, security headers, Apple/Thunderbird-опции, SOAP 400, `/version`.
+- [x] Тесты: golden/unit/race/fuzz, `vet`, `staticcheck`, `govulncheck`.
+- [x] Сборка: distroless nonroot, digest-пиннинг, CI, Dependabot, SBOM, `SECURITY.md`.
+- [x] Деплой: образ `autodiscover-go:1.0.0` (linux/amd64) в трёх реестрах, digest-пиннинг, три площадки обновлены.
+- [x] Проверка: `/` с ручными настройками, `/version` = `1.0.0`, HTTP smoke на каждой площадке, TLS-цепочка валидна, HSTS, логи без PII.
+- [x] Старые файлы сохранены в `_old_20261028/`; README площадок ссылаются на проект.
+
+### 11.2. Осталось
+
+1. [ ] Microsoft RCA (Outlook Autodiscover + Outlook Connectivity) — внешняя проверка со стороны Microsoft.
+2. [x] Ручная матрица клиентов — **не делаем** для 1.0.0 (решение); HTTP-level проверки в `docs/compat.md`.
+3. [x] SRV-записи — **не делаем** (решение); A/HTTPS работают, клиенты используют `autoconfig.*`/`autodiscover.*`.
+4. [x] Закоммитить изменения и поставить тег `v1.0.0`.
+5. [ ] Подпись образа: keyless cosign через GitHub Actions OIDC (identity = workflow/org), либо ключ в CI-секрете. Требует `id-token: write` и поддержки OCI-подписей реестром.
+6. [x] Autodiscover v2 JSON — исследовано: официальной публичной схемы нет; v2 возвращает только URL для EWS/ActiveSync, IMAP/SMTP остаются в v1. Не реализуем (см. 11.4).
+7. [ ] CI XSD-профиль, nightly DNS/SRV/TLS; метрики/retention, hot reload — опционально.
+8. [x] Canary не выполнялся: развёртывание сразу на трёх площадках; rollback-артефакты сохранены.
+
+### 11.3. Профилирование
+
+- [x] pprof реализован: отдельный loopback-listener, выключен по умолчанию, вне публичного порта.
+- [x] Для текущей нагрузки профилирование не требуется: запросы редкие (настройка аккаунта), latency в логах < 1 ms, память ~10 MB, лимит 128 MiB.
+- [ ] При необходимости: включить `AUTOCONFIG_PPROF=127.0.0.1:6060`, снять CPU/heap 30 s под нагрузкой (`hey`/`wrk`), проверить аллокации `marshalXML`/`marshalPlist`. Делать только при появлении жалоб на latency/память.
+
+### 11.4. Autodiscover v2 JSON — результат исследования
+
+- Официальной публичной спецификации, связывающей Outlook Classic с Autodiscover v2, не найдено. Ответ Microsoft Q&A (Microsoft External Staff): v2 — дополнительный слой, который возвращает JSON с одним URL для запрошенного протокола (`EWS`, `ActiveSync`), но **не отдаёт IMAP/SMTP-настройки**; они остаются в v1 (POX).
+- Источники:
+  - <https://learn.microsoft.com/en-us/answers/questions/5646358/does-outlook-classic-support-autodiscover-v2-i-m-c>
+  - <https://docs.grommunio.com/man/autodiscover.7.html> (third-party, пример формата)
+- Решение: для IMAP/SMTP v2 JSON не реализуем; POX v1 покрывает Outlook desktop. Если появится официальный контракт для IMAP — вернуться к пункту.

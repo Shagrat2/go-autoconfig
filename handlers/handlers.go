@@ -17,6 +17,8 @@ import (
 
 const maxBodyBytes = 1 << 20
 
+var version = "devel"
+
 type Handler struct {
 	Config *config.Config
 }
@@ -25,6 +27,7 @@ func NewRouter(c *config.Config) http.Handler {
 	h := &Handler{Config: c}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", h.Index)
 	mux.HandleFunc("POST /autodiscover/autodiscover.xml", h.Outlook)
 	mux.HandleFunc("GET /autodiscover/autodiscover.xml", h.Outlook)
 	mux.HandleFunc("GET /mail/config-v1.1.xml", h.Thunderbird)
@@ -164,9 +167,9 @@ type versionInfo struct {
 }
 
 func (h *Handler) Version(w http.ResponseWriter, r *http.Request) {
-	info := versionInfo{Version: "devel", Go: runtime.Version()}
+	info := versionInfo{Version: version, Go: runtime.Version()}
 	if build, ok := debug.ReadBuildInfo(); ok {
-		if build.Main.Version != "" {
+		if build.Main.Version != "" && build.Main.Version != "(devel)" {
 			info.Version = build.Main.Version
 		}
 		for _, setting := range build.Settings {

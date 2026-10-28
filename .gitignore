@@ -1,2 +1,10 @@
 # jetbrains goland
 .idea
+
+# build artifacts
+/autoconfig
+*.test
+coverage.out
+
+# local deployment config
+/deploy/config.json

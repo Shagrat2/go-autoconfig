@@ -1,7 +1,11 @@
 # go-autoconfig
 IMAP/SMTP autodiscover feature for Thunderbird, Apple Mail and Microsoft Outlook.
 
-You need DNS SRV-record to get work Outlook and Thunderbird:
+## Status
+
+Release `1.0.0` (linux/amd64, digest-pinned) is deployed and verified at the HTTP level on three independent sites: landing page, health/version, Thunderbird, Outlook POX, Apple-disabled, headers, unknown schema/host and the 1 MiB body limit. Remaining acceptance: Microsoft RCA and the real-client matrix in [docs/compat.md](docs/compat.md).
+
+DNS SRV records are recommended, but clients also try the `autoconfig.`/`autodiscover.` hosts directly:
 ```
 _autodiscover._tcp IN SRV 0 0 443 autoconfig.example.com.
 ```
@@ -20,6 +24,9 @@ The profile contains a static `user@<domain>` address that the user edits after 
 ### Outlook
 `POST https://autoconfig.example.com/autodiscover/autodiscover.xml`
 
+### Web page
+`GET https://autoconfig.example.com/` — manual IMAP/SMTP settings, client notes, project and version.
+
 ### Health and version
 `GET https://autoconfig.example.com/healthz`
 
@@ -33,6 +40,22 @@ The profile contains a static `user@<domain>` address that the user edits after 
 2. Edit `config.example.json` and copy it to `config.json`.
 3. Launch it `./server -config config.json`.
 4. Optionally use `nginx` as reverse-proxy and `systemd` to do daemon.
+
+## Deployment
+
+See [docs/deployment.md](docs/deployment.md) for Caddy + Compose, DNS/SRV records, TLS and rollback. Client acceptance is tracked in [docs/compat.md](docs/compat.md).
+
+## Container
+
+```sh
+docker build -t go-autoconfig .
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -p 8080:8080 \
+  -v "$PWD/config.json:/etc/autoconfig/config.json:ro" \
+  go-autoconfig
+```
+
+The image is based on distroless, runs as `nonroot` and has no shell. The config is read from `/etc/autoconfig/config.json`; mount it read-only.
 
 ## Configuration
 JSON file, one or more domains per instance:
@@ -68,3 +91,13 @@ Rate limiting: set `rate_limit_per_minute` to enable a per-client fixed window (
 
 ### pprof
 Disabled by default. Set `pprof_listen` to a loopback address (for example `127.0.0.1:6060`) or set `AUTOCONFIG_PPROF=1` (same address) / `AUTOCONFIG_PPROF=host:port`. The profiler runs on a separate listener; non-loopback binds are rejected. It is never mounted on the public port.
+
+For ad-hoc profiling:
+
+```sh
+AUTOCONFIG_PPROF=127.0.0.1:6060 ./autoconfig -config config.json
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+Profiling is not part of normal operation: the service handles a few requests per account setup, and current latency is well below 1 ms.

@@ -269,22 +269,22 @@ func TestUnknownHost(t *testing.T) {
 
 func TestMultipleDomains(t *testing.T) {
 	cfg := testConfig()
-	cfg.Domains["voronko.de"] = config.Domain{
-		IMAP: config.Server{Host: "mail.voronko.de", Port: 993},
-		SMTP: config.Server{Host: "mail.voronko.de", Port: 587, STARTTLS: true},
+	cfg.Domains["example.org"] = config.Domain{
+		IMAP: config.Server{Host: "mail.example.org", Port: 993},
+		SMTP: config.Server{Host: "mail.example.org", Port: 587, STARTTLS: true},
 	}
 
-	rec := doRequest(t, cfg, http.MethodGet, "/mail/config-v1.1.xml", "autoconfig.voronko.de", "")
+	rec := doRequest(t, cfg, http.MethodGet, "/mail/config-v1.1.xml", "autoconfig.example.org", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "<domain>voronko.de</domain>") {
-		t.Errorf("response does not contain voronko.de:\n%s", body)
+	if !strings.Contains(body, "<domain>example.org</domain>") {
+		t.Errorf("response does not contain example.org:\n%s", body)
 	}
-	if !strings.Contains(body, "<hostname>mail.voronko.de</hostname>") {
-		t.Errorf("response does not contain voronko mail host:\n%s", body)
+	if !strings.Contains(body, "<hostname>mail.example.org</hostname>") {
+		t.Errorf("response does not contain example.org mail host:\n%s", body)
 	}
 }
 
@@ -425,13 +425,13 @@ func TestApplePayloadCompleteness(t *testing.T) {
 func TestAppleUUIDPerDomain(t *testing.T) {
 	cfg := testConfig()
 	cfg.EnableApple = true
-	cfg.Domains["voronko.de"] = config.Domain{
-		IMAP: config.Server{Host: "mail.voronko.de", Port: 993},
-		SMTP: config.Server{Host: "mail.voronko.de", Port: 587, STARTTLS: true},
+	cfg.Domains["example.org"] = config.Domain{
+		IMAP: config.Server{Host: "mail.example.org", Port: 993},
+		SMTP: config.Server{Host: "mail.example.org", Port: 587, STARTTLS: true},
 	}
 
 	first := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.example.com", "").Body.String()
-	second := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.voronko.de", "").Body.String()
+	second := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.example.org", "").Body.String()
 
 	uuid1 := readPlistValue(t, first, "PayloadUUID")
 	uuid2 := readPlistValue(t, second, "PayloadUUID")
@@ -481,6 +481,55 @@ func TestCacheControlNoStore(t *testing.T) {
 	rec := doRequest(t, testConfig(), http.MethodGet, "/mail/config-v1.1.xml", "autoconfig.example.com", "")
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestIndexPage(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodGet, "/", "autoconfig.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got == "" {
+		t.Error("Content-Security-Policy is missing")
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"go-autoconfig",
+		"example.com",
+		"imap.example.com",
+		"993",
+		"smtp.example.com",
+		"465",
+		"SSL",
+		"Manual setup",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page does not contain %q", want)
+		}
+	}
+	if strings.Contains(body, "user@example.com") {
+		t.Error("page must not contain a user email address")
+	}
+}
+
+func TestIndexUnknownHost(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodGet, "/", "unknown.test", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestIndexAppleLink(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableApple = true
+
+	body := doRequest(t, cfg, http.MethodGet, "/", "autoconfig.example.com", "").Body.String()
+	if !strings.Contains(body, "/email.mobileconfig") {
+		t.Error("apple profile link is missing")
 	}
 }
 
