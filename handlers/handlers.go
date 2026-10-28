@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -88,8 +89,15 @@ func (h *Handler) Outlook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := marshalXML(buildAutodiscover(d, domain, req.Request.EMailAddress, req.Request.AcceptableResponseSchema))
+	schema, ok := responseSchema(req.Request.AcceptableResponseSchema)
+	if !ok {
+		http.Error(w, "unsupported AcceptableResponseSchema", http.StatusBadRequest)
+		return
+	}
+
+	out, err := marshalXML(buildAutodiscover(d, domain, req.Request.EMailAddress, schema))
 	if err != nil {
+		logError(r, "marshal autodiscover response", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -106,6 +114,7 @@ func (h *Handler) Thunderbird(w http.ResponseWriter, r *http.Request) {
 
 	out, err := marshalXML(buildClientConfig(d, domain))
 	if err != nil {
+		logError(r, "marshal autoconfig response", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -122,6 +131,7 @@ func (h *Handler) AppleMail(w http.ResponseWriter, r *http.Request) {
 
 	out, err := marshalPlist(buildAppleProfile(d, domain))
 	if err != nil {
+		logError(r, "marshal apple profile", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -165,6 +175,15 @@ func hostname(hostport string) string {
 	hostport = strings.Trim(strings.TrimSuffix(hostport, "."), "[]")
 
 	return strings.ToLower(hostport)
+}
+
+func logError(r *http.Request, msg string, err error) {
+	slog.ErrorContext(r.Context(), msg,
+		"request_id", RequestID(r.Context()),
+		"host", r.Host,
+		"path", r.URL.Path,
+		"error", err,
+	)
 }
 
 func writeXML(w http.ResponseWriter, out []byte) {

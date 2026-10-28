@@ -142,7 +142,8 @@ func TestOutlookEscapesEmail(t *testing.T) {
 
 	var got struct {
 		User struct {
-			DisplayName string `xml:"DisplayName"`
+			DisplayName             string `xml:"DisplayName"`
+			AutoDiscoverSMTPAddress string `xml:"AutoDiscoverSMTPAddress"`
 		} `xml:"Response>User"`
 		Accounts []struct {
 			Protocol struct {
@@ -156,6 +157,9 @@ func TestOutlookEscapesEmail(t *testing.T) {
 	if got.User.DisplayName != payload {
 		t.Errorf("DisplayName = %q, want %q", got.User.DisplayName, payload)
 	}
+	if got.User.AutoDiscoverSMTPAddress != payload {
+		t.Errorf("AutoDiscoverSMTPAddress = %q, want %q", got.User.AutoDiscoverSMTPAddress, payload)
+	}
 	if len(got.Accounts) != 2 {
 		t.Fatalf("accounts = %d, want 2", len(got.Accounts))
 	}
@@ -166,27 +170,27 @@ func TestOutlookEscapesEmail(t *testing.T) {
 	}
 }
 
-func TestOutlookEscapesSchema(t *testing.T) {
+func TestOutlookRejectsUnknownSchema(t *testing.T) {
 	rec := doRequest(t, testConfig(), http.MethodPost, "/autodiscover/autodiscover.xml", "autodiscover.example.com",
 		`<?xml version="1.0"?><Autodiscover><Request><EMailAddress>user@example.com</EMailAddress><AcceptableResponseSchema>http://evil/2006a"/&gt;&lt;x a="</AcceptableResponseSchema></Request></Autodiscover>`)
 
-	body := rec.Body.String()
-	assertWellFormedXML(t, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if strings.Contains(rec.Body.String(), "<x a=") {
+		t.Fatalf("response contains injected element:\n%s", rec.Body.String())
+	}
+}
 
-	if strings.Contains(body, "<x a=") {
-		t.Fatalf("response contains injected element:\n%s", body)
-	}
+func TestOutlookEmptySchema(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodPost, "/autodiscover/autodiscover.xml", "autodiscover.example.com",
+		`<?xml version="1.0"?><Autodiscover><Request><EMailAddress>user@example.com</EMailAddress></Request></Autodiscover>`)
 
-	var got struct {
-		Response struct {
-			Xmlns string `xml:"xmlns,attr"`
-		} `xml:"Response"`
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if err := xml.Unmarshal([]byte(body), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.Response.Xmlns != responseSchema2006a {
-		t.Errorf("Response xmlns = %q, want %q", got.Response.Xmlns, responseSchema2006a)
+	if !strings.Contains(rec.Body.String(), `xmlns="`+responseSchema2006a+`"`) {
+		t.Fatalf("default schema was not applied:\n%s", rec.Body.String())
 	}
 }
 
@@ -373,5 +377,74 @@ func TestMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func readPlistValue(t *testing.T, body, key string) string {
+	t.Helper()
+
+	dec := xml.NewDecoder(strings.NewReader(body))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			t.Fatalf("key %q not found", key)
+		}
+		if err != nil {
+			t.Fatalf("parse plist: %v", err)
+		}
+
+		cd, ok := tok.(xml.CharData)
+		if !ok || string(cd) != key {
+			continue
+		}
+
+		var start xml.StartElement
+		for {
+			tok, err = dec.Token()
+			if err != nil {
+				t.Fatalf("parse plist after %q: %v", key, err)
+			}
+			if start, ok = tok.(xml.StartElement); ok {
+				break
+			}
+		}
+		if start.Name.Local == "true" || start.Name.Local == "false" {
+			return start.Name.Local
+		}
+
+		tok, err = dec.Token()
+		if err != nil {
+			t.Fatalf("parse value for %q: %v", key, err)
+		}
+		cd, ok = tok.(xml.CharData)
+		if !ok {
+			t.Fatalf("value for %q is not text", key)
+		}
+
+		return string(cd)
+	}
+}
+
+func TestAppleSTARTTLSProfile(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableApple = true
+	cfg.Domains["example.com"] = config.Domain{
+		IMAP: config.Server{Host: "imap.example.com", Port: 143, STARTTLS: true},
+		SMTP: config.Server{Host: "smtp.example.com", Port: 587, STARTTLS: true},
+	}
+
+	rec := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	assertWellFormedXML(t, body)
+
+	if got := readPlistValue(t, body, "IncomingMailServerUseSSL"); got != "false" {
+		t.Errorf("IncomingMailServerUseSSL = %q, want false", got)
+	}
+	if got := readPlistValue(t, body, "OutgoingMailServerUseSSL"); got != "false" {
+		t.Errorf("OutgoingMailServerUseSSL = %q, want false", got)
 	}
 }

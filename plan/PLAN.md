@@ -325,12 +325,12 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 ### 10.2. P1 — протокольная корректность и безопасность
 
-- [ ] Apple: `IncomingMailServerUseSSL`/`OutgoingMailServerUseSSL` = `!STARTTLS`; сейчас жёстко `<true/>` (`handlers/responses.go:281,286`), из-за чего профиль для 587/STARTTLS неверен. Проверить на iOS/macOS.
-- [ ] Autodiscover: неизвестный `AcceptableResponseSchema` → `400`; сейчас молча подставляется `2006a` (`allowlistedSchema`). По MS-OXDSCLI клиент MUST присылать `.../outlook/responseschema/2006a`; пустой — можно трактовать как `2006a`.
-- [ ] Autodiscover `User`: добавить `AutoDiscoverSMTPAddress` (и решить по `LegacyDN`/`DeploymentId`) либо зафиксировать отклонение от XSD; проверить на Outlook 2016/2019/365.
+- [x] Apple: `IncomingMailServerUseSSL`/`OutgoingMailServerUseSSL` = `!STARTTLS` (было жёстко `<true/>`); покрыто тестом. Проверка установки на iOS/macOS — в ручном smoke.
+- [x] Autodiscover: неизвестный `AcceptableResponseSchema` → `400`; пустой трактуется как `2006a`. По MS-OXDSCLI клиент MUST присылать `.../outlook/responseschema/2006a`.
+- [x] Autodiscover `User`: добавлен `AutoDiscoverSMTPAddress`; `LegacyDN`/`DeploymentId`/`MicrosoftOnline` не добавляем — это Exchange-специфичные поля, Outlook для IMAP их допускает (проверить в ручной матрице).
 - [ ] Rate limiting: token bucket на IP или лимиты на ingress для `/autodiscover/*` и `/mail/*`; защита от флуда и усиления памяти.
-- [ ] `X-Request-ID`: не доверять клиентскому значению без проверки; принимать только `^[A-Za-z0-9._-]{1,64}$` либо всегда генерировать; ответный заголовок сохранить.
-- [ ] Логировать ошибки рендеринга (`marshalXML`/`marshalPlist`) с `request_id`; клиенту — только `500 internal server error`.
+- [x] `X-Request-ID`: принимается только `^[A-Za-z0-9._-]{1,64}$`, иначе генерируется; проброс в `context` для логов и ответный заголовок — покрыто тестами.
+- [x] Ошибки рендеринга (`marshalXML`/`marshalPlist`) логируются с `request_id`/host/path; клиенту — только `500 internal server error`.
 - [x] `http.Server.MaxHeaderBytes` = 16 KiB для основного и pprof-listener.
 - [ ] `Cache-Control: no-store` для Outlook-ответа с email.
 - [ ] Заголовки безопасности: HSTS на прокси, `X-Content-Type-Options: nosniff` уже есть; добавить `Referrer-Policy: no-referrer` на случай ошибок.
@@ -343,7 +343,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [ ] Thunderbird: конфигурируемые `socketType` (`SSL`/`STARTTLS`, при необходимости `plain`) и `authentication` (сейчас только `password-cleartext`).
 - [ ] Брендинг на домен: `displayName`/`displayShortName` Thunderbird, `PayloadOrganization`/`EmailAccountDescription` Apple; сейчас подставляется `%EMAILADDRESS%`/домен.
 - [ ] Fuzz-тесты: `Host`, Outlook XML body, plist-поля; `go test -fuzz=Fuzz -fuzztime=30s`.
-- [ ] Наблюдаемость: `/version` (`debug.ReadBuildInfo`), счётчики запросов/ошибок (Prometheus) — опционально; логирование 5xx.
+- [ ] Наблюдаемость: `/version` (`debug.ReadBuildInfo`), счётчики запросов/ошибок (Prometheus) — опционально.
 - [ ] При добавлении метрик на основной mux реализовать `http.Flusher`/`Hijacker` в `statusRecorder` (pprof уже на отдельном listener).
 - [ ] Runbook по DNS/TLS и приватности: какие SRV/CNAME, TLS 1.2+, сроки хранения логов.
 
@@ -364,10 +364,10 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 |---|---|---|
 | 1 | `https://<domain>/autodiscover/autodiscover.xml` и `https://autodiscover.<domain>/autodiscover/autodiscover.xml` | [x] Host-routing + case-insensitive path |
 | 2 | POX POST с `EMailAddress` и `AcceptableResponseSchema` | [x] |
-| 3 | `AcceptableResponseSchema` = `.../outlook/responseschema/2006a` | [x] allowlist 2006a/2006; [ ] не-allowlisted → 400 (P1) |
+| 3 | `AcceptableResponseSchema` = `.../outlook/responseschema/2006a` | [x] allowlist 2006a/2006; не-allowlisted → 400; пустой → 2006a |
 | 4 | Root `xmlns=.../responseschema/2006`, `Response xmlns=<schema>` | [x] |
 | 5 | `User/DisplayName` | [x] |
-| 6 | `User/LegacyDN`, `AutoDiscoverSMTPAddress`, `DeploymentId` (XSD) | [ ] `AutoDiscoverSMTPAddress` + решение по остальным (P1) |
+| 6 | `User/LegacyDN`, `AutoDiscoverSMTPAddress`, `DeploymentId` (XSD) | [x] `AutoDiscoverSMTPAddress`; `LegacyDN`/`DeploymentId` — осознанное отклонение |
 | 7 | `Account/AccountType=email`, `Action=settings` | [x] |
 | 8 | `Protocol`: Type, TTL, Server, Port, LoginName, DomainRequired, DomainName, SPA, TLS/SSL, AuthRequired | [x] |
 | 9 | Unauthenticated GET → `302` на HTTPS (phase 3 MS) | [ ] (P2; сейчас 400, если прокси не редиректит) |
@@ -396,7 +396,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 |---|---|---|
 | 1 | `PayloadType=com.apple.mail.managed`, `EmailTypeIMAP` | [x] |
 | 2 | Обязательные: account type, user display name, email, host, port, username, auth | [x] |
-| 3 | `Use SSL` соответствует implicit TLS | [ ] `!STARTTLS` (P1) |
+| 3 | `Use SSL` соответствует implicit TLS | [x] `!STARTTLS` |
 | 4 | Опциональные S/MIME и MailDrop ключи | [ ] (P2) |
 | 5 | `PayloadVersion` — integer | [ ] сейчас `<real>` (P2) |
 | 6 | Уникальные `PayloadUUID`/`PayloadIdentifier` на домен | [ ] сейчас статические (P2) |
@@ -419,7 +419,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [x] Zero-dependency, статический бинарник, graceful shutdown, типизированный рендеринг — хорошая база.
 - [ ] Вынести `newServer(cfg)`/middleware в тестируемый конструктор (сейчас `run()` в `package main`) — P3.
 - [x] `statusRecorder` не реализует `http.Flusher`/`Hijacker`; pprof вынесен на отдельный listener, поэтому риск снят. Для метрик на основном mux — P2.
-- [ ] 5xx рендеринга не логируются — P1.
+- [x] 5xx рендеринга логируются с `request_id`.
 - [ ] Нет метрик/версии/build info — P2/P3.
 - [ ] Нет rate limiting — P1.
 - [ ] Нет hot reload конфига — P3 (документировать рестарт).
@@ -441,7 +441,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | OWASP Top 10 2021 | A09 Logging: мониторинг/алерты/retention | [ ] P2 |
 | OWASP Top 10 2021 | A10 SSRF: исходящих запросов нет | [x] |
 | OWASP ASVS 4.0 | V5 validation, V6 encoding, V14 config | [x] |
-| OWASP ASVS 4.0 | V7 errors/logging (5xx не логируются) | [ ] P1 |
+| OWASP ASVS 4.0 | V7 errors/logging (5xx логируются с request_id) | [x] |
 | OWASP ASVS 4.0 | V9 communications (TLS/HSTS/сертификаты) | [ ] P0 |
 | OWASP ASVS 4.0 | V14 config: pprof только loopback, отдельный listener | [x] |
 | Go security | govulncheck, staticcheck, timeouts, MaxBytesReader, crypto/rand, без unsafe | [x] |

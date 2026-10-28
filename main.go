@@ -12,6 +12,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -148,6 +149,7 @@ func logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		id := requestID(r)
+		r = r.WithContext(handlers.WithRequestID(r.Context(), id))
 		w.Header().Set("X-Request-ID", id)
 
 		rec := &statusRecorder{ResponseWriter: w}
@@ -182,8 +184,10 @@ func recoverPanics(next http.Handler) http.Handler {
 	})
 }
 
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
 func requestID(r *http.Request) string {
-	if id := r.Header.Get("X-Request-ID"); id != "" {
+	if id := r.Header.Get("X-Request-ID"); requestIDPattern.MatchString(id) {
 		return id
 	}
 

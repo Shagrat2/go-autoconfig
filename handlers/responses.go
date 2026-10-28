@@ -30,7 +30,8 @@ type autodiscoverBody struct {
 }
 
 type autodiscoverUser struct {
-	DisplayName string `xml:"DisplayName"`
+	DisplayName             string `xml:"DisplayName"`
+	AutoDiscoverSMTPAddress string `xml:"AutoDiscoverSMTPAddress"`
 }
 
 type autodiscoverAcct struct {
@@ -57,8 +58,11 @@ func buildAutodiscover(d config.Domain, domain, email, schema string) autodiscov
 	return autodiscoverDoc{
 		Xmlns: autodiscoverNS,
 		Response: autodiscoverBody{
-			Xmlns: allowlistedSchema(schema),
-			User:  autodiscoverUser{DisplayName: email},
+			Xmlns: schema,
+			User: autodiscoverUser{
+				DisplayName:             email,
+				AutoDiscoverSMTPAddress: email,
+			},
 			Accounts: []autodiscoverAcct{
 				buildAccount("IMAP", d.IMAP, domain, email),
 				buildAccount("SMTP", d.SMTP, domain, email),
@@ -92,12 +96,15 @@ func buildAccount(kind string, s config.Server, domain, email string) autodiscov
 	}
 }
 
-func allowlistedSchema(s string) string {
-	if s == responseSchema2006 || s == responseSchema2006a {
-		return s
+func responseSchema(s string) (string, bool) {
+	switch s {
+	case "":
+		return responseSchema2006a, true
+	case responseSchema2006, responseSchema2006a:
+		return s, true
+	default:
+		return "", false
 	}
-
-	return responseSchema2006a
 }
 
 type clientConfigDoc struct {
@@ -278,12 +285,12 @@ func buildAppleProfile(d config.Domain, domain string) plistDocument {
 		{key: "IncomingMailServerAuthentication", val: plistString("EmailAuthPassword")},
 		{key: "IncomingMailServerHostName", val: plistString(d.IMAP.Host)},
 		{key: "IncomingMailServerPortNumber", val: plistInteger(d.IMAP.Port)},
-		{key: "IncomingMailServerUseSSL", val: plistBool(true)},
+		{key: "IncomingMailServerUseSSL", val: plistBool(!d.IMAP.STARTTLS)},
 		{key: "IncomingMailServerUsername", val: plistString(email)},
 		{key: "OutgoingMailServerAuthentication", val: plistString("EmailAuthPassword")},
 		{key: "OutgoingMailServerHostName", val: plistString(d.SMTP.Host)},
 		{key: "OutgoingMailServerPortNumber", val: plistInteger(d.SMTP.Port)},
-		{key: "OutgoingMailServerUseSSL", val: plistBool(true)},
+		{key: "OutgoingMailServerUseSSL", val: plistBool(!d.SMTP.STARTTLS)},
 		{key: "OutgoingMailServerUsername", val: plistString(email)},
 		{key: "OutgoingPasswordSameAsIncomingPassword", val: plistBool(true)},
 		{key: "PayloadDescription", val: plistString("Configure Email Settings")},

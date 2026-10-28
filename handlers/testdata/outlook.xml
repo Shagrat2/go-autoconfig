@@ -3,6 +3,7 @@
 	<Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
 		<User>
 			<DisplayName>user@example.com</DisplayName>
+			<AutoDiscoverSMTPAddress>user@example.com</AutoDiscoverSMTPAddress>
 		</User>
 		<Account>
 			<AccountType>email</AccountType>
