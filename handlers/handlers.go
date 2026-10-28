@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/Shagrat2/go-autoconfig/config"
@@ -27,6 +30,8 @@ func NewRouter(c *config.Config) http.Handler {
 	mux.HandleFunc("GET /mail/config-v1.1.xml", h.Thunderbird)
 	mux.HandleFunc("GET /.well-known/autoconfig/mail/config-v1.1.xml", h.Thunderbird)
 	mux.HandleFunc("GET /healthz", h.Health)
+	mux.HandleFunc("GET /version", h.Version)
+	mux.HandleFunc("POST /autodiscover/autodiscover.svc", h.SOAP)
 	if c.EnableApple {
 		mux.HandleFunc("GET /email.mobileconfig", h.AppleMail)
 	}
@@ -41,10 +46,12 @@ func NewRouter(c *config.Config) http.Handler {
 
 var routes = []string{
 	"/autodiscover/autodiscover.xml",
+	"/autodiscover/autodiscover.svc",
 	"/mail/config-v1.1.xml",
 	"/.well-known/autoconfig/mail/config-v1.1.xml",
 	"/email.mobileconfig",
 	"/healthz",
+	"/version",
 }
 
 func canonicalPath(p string) (string, bool) {
@@ -139,8 +146,44 @@ func (h *Handler) AppleMail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
 	w.Header().Set("Content-Disposition", `attachment; filename="email.mobileconfig"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
+}
+
+func (h *Handler) SOAP(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "SOAP Autodiscover is not supported; use POX", http.StatusBadRequest)
+}
+
+type versionInfo struct {
+	Version  string `json:"version"`
+	Commit   string `json:"commit,omitempty"`
+	Time     string `json:"time,omitempty"`
+	Modified string `json:"modified,omitempty"`
+	Go       string `json:"go"`
+}
+
+func (h *Handler) Version(w http.ResponseWriter, r *http.Request) {
+	info := versionInfo{Version: "devel", Go: runtime.Version()}
+	if build, ok := debug.ReadBuildInfo(); ok {
+		if build.Main.Version != "" {
+			info.Version = build.Main.Version
+		}
+		for _, setting := range build.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				info.Commit = setting.Value
+			case "vcs.time":
+				info.Time = setting.Value
+			case "vcs.modified":
+				info.Modified = setting.Value
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(info)
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +232,7 @@ func logError(r *http.Request, msg string, err error) {
 func writeXML(w http.ResponseWriter, out []byte) {
 	w.Header().Set("Content-Type", "application/xml; charset=UTF-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }

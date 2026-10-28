@@ -3,7 +3,7 @@
 **Fork:** https://github.com/Shagrat2/go-autoconfig  
 **Upstream:** https://github.com/savely-krasovsky/go-autoconfig  
 **Базовая версия:** upstream `master` (Go 1.18, Echo 4.11.1)  
-**Статус:** Phase 1–3 выполнены в ветке `modernize`; аудит протоколов/архитектуры/безопасности — 2026-10-28  
+**Статус:** Phase 1–3 и этап A аудита (код) выполнены в ветке `modernize`; следующий этап — сборка/CI  
 **Дата:** 2026-10-28
 
 ---
@@ -311,50 +311,93 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 Источники: MS-OXDSCLI (Autodiscover response XSD и AcceptableResponseSchema), MS Learn «Autodiscover for Exchange» и «Autodiscover service in Exchange Server», MozillaWiki Thunderbird Autoconfiguration / ConfigFileFormat / Security, Apple Device Management «Mail», RFC 6186, RFC 8314.
 
-Обозначения: `[x]` — сделано, `[ ]` — todo. Приоритеты: **P0** — блокер выката, **P1** — до прода, **P2** — следующий спринт, **P3** — улучшение.
+Обозначения: `[x]` — сделано, `[ ]` — todo. Порядок работ: **A (код) → B (сборка) → C (выкат) → D (после выката)**.
 
-### 10.1. P0 — блокеры выката
+Текущий статус: этап A закрыт, кроме исследовательского Autodiscover v2 JSON; следующий — этап B (Docker/CI).
 
-- [ ] Dockerfile: multi-stage `golang:1.27.3` → `gcr.io/distroless/static-debian12:nonroot`; `.dockerignore`; пиннинг базовых образов по digest.
+### 10.1. Этап A — весь код (до сборки)
+
+Порядок работ: сначала код и тесты, потом упаковка. Все пункты этапа закрываются в этой ветке, кроме исследовательских и инфраструктурных.
+
+#### A1. HTTP, безопасность, устойчивость
+
+- [x] 1 MiB body limit (`http.MaxBytesReader`, 413).
+- [x] Таймауты `http.Server`: `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`.
+- [x] Graceful shutdown по SIGINT/SIGTERM для основного и pprof-серверов.
+- [x] Логи без query/body/email; `request_id`, host, path, status, duration.
+- [x] `X-Request-ID`: валидация `^[A-Za-z0-9._-]{1,64}$`, иначе генерация; проброс в `context`.
+- [x] Rate limiting: fixed window на клиентский IP (`rate_limit_per_minute`), `Retry-After`, `trust_proxy` для `X-Forwarded-For`; тесты.
+- [x] `Cache-Control: no-store` для XML/plist/version.
+- [x] Security headers: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`; HSTS при TLS/`X-Forwarded-Proto: https`.
+- [x] `MaxHeaderBytes` 16 KiB на основном и pprof-серверах.
+- [x] pprof на отдельном loopback-listener, вне публичного mux.
+- [x] XML/plist injection устранён; schema allowlist; ошибки рендеринга логируются.
+
+#### A2. Outlook POX
+
+- [x] Оба endpoint-а: `https://<domain>/autodiscover/autodiscover.xml` и `https://autodiscover.<domain>/...`.
+- [x] Регистронезависимые пути; POST и GET.
+- [x] `AcceptableResponseSchema`: allowlist 2006/2006a, пустой → 2006a, неизвестный → 400.
+- [x] `User/DisplayName` + `AutoDiscoverSMTPAddress`.
+- [x] `Account`/`Protocol` (IMAP/SMTP, TTL, Server, Port, LoginName, DomainRequired, DomainName, SPA, TLS/SSL, AuthRequired).
+- [x] SOAP `.svc` — явный 400 с пояснением.
+- [x] `LegacyDN`/`DeploymentId`/`MicrosoftOnline` не добавляем — Exchange-специфичные, для IMAP допускаются; проверить в ручной матрице.
+- [ ] Autodiscover v2 JSON — **исследование**: публичной стабильной схемы для IMAP нет; реализовывать наугад нельзя. Нужен официальный контракт или тест нового Outlook.
+- [ ] Unauthenticated GET → 302 на HTTPS — делается на прокси/ingress, не в приложении.
+
+#### A3. Thunderbird
+
+- [x] `clientConfig` 1.1, оба URL (`/mail/config-v1.1.xml`, `/.well-known/...`).
+- [x] `?emailaddress=` игнорируется и не попадает в ответ; тест.
+- [x] `display_name` на домен.
+- [x] `socket_type` (`SSL`/`STARTTLS`/`plain`) с дефолтом из `starttls`.
+- [x] `authentication` с allowlist (`password-cleartext` по умолчанию).
+- [ ] SRV/DNSSEC/TLSA runbook — этап C.
+
+#### A4. Apple Mail
+
+- [x] `UseSSL = !STARTTLS` для входящего и исходящего.
+- [x] `SMIMEEncryptionEnabled`, `SMIMESigningEnabled`, `allowMailDrop`; integer `PayloadVersion`.
+- [x] Убран не входящий в схему `HasRemovalPasscode`.
+- [x] `PayloadUUID`/`PayloadIdentifier` детерминированно на домен (UUIDv5).
+- [x] `application/x-apple-aspen-config`, выключен по умолчанию, статический `user@domain`.
+- [ ] Подписанный профиль — нужен сертификат, этап C.
+- [ ] Реальная установка на iOS/macOS — ручной smoke, этап C.
+
+#### A5. Качество и наблюдаемость
+
+- [x] Golden/unit/race-тесты; `go vet`, `staticcheck`, `govulncheck`.
+- [x] Fuzz: `Host`, Outlook body, выбор домена по Host.
+- [x] Zero-dependency граф; `/version` с build info.
+- [ ] Метрики (Prometheus) — опционально, этап D.
+- [ ] XSD/plutil-валидация в CI — этап B.
+
+### 10.2. Этап B — сборка и CI
+
+- [ ] Dockerfile: multi-stage `golang:1.27.3` → `gcr.io/distroless/static-debian12:nonroot`; `.dockerignore`; пиннинг образов по digest.
 - [ ] Контейнер: non-root, read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, без shell, лимиты CPU/RAM.
-- [ ] CI (GitHub Actions): `go build`, `go test`, `go vet`, `staticcheck`, `govulncheck`, `docker build`; Dependabot для Go и Actions.
-- [ ] Supply chain: SBOM (syft или `go version -m`), подпись образа (cosign), provenance.
-- [ ] TLS-терминация + HSTS; HTTP→HTTPS redirect для `http://autodiscover.<domain>/autodiscover/autodiscover.xml`; валидные сертификаты на `autodiscover.*`, `autoconfig.*` и bare-domain.
-- [ ] DNS: CNAME/A, `_autodiscover._tcp`, `_imaps._tcp`, `_submission._tcp`/`_submissions._tcp`; при возможности DNSSEC и TLSA (RFC 6186/8314).
-- [ ] Ручная матрица совместимости: Outlook 2016/2019/365, Thunderbird, Apple Mail/iOS (с `enable_apple`), K-9/FairEmail; результаты в `docs/compat.md`.
+- [ ] GitHub Actions: `go build`, `go test`, `go test -race`, `go vet`, `staticcheck`, `govulncheck`, короткий fuzz, `docker build`.
+- [ ] CI: `xmllint --schema` по MS-OXDSCLI (или адаптированный IMAP-профиль XSD), `plutil`/`lxml` для Apple и Thunderbird.
+- [ ] Dependabot для Go и Actions.
+- [ ] SBOM (syft/`go version -m`), cosign, provenance.
+- [ ] `SECURITY.md`.
 
-### 10.2. P1 — протокольная корректность и безопасность
+### 10.3. Этап C — выкат и приёмка
 
-- [x] Apple: `IncomingMailServerUseSSL`/`OutgoingMailServerUseSSL` = `!STARTTLS` (было жёстко `<true/>`); покрыто тестом. Проверка установки на iOS/macOS — в ручном smoke.
-- [x] Autodiscover: неизвестный `AcceptableResponseSchema` → `400`; пустой трактуется как `2006a`. По MS-OXDSCLI клиент MUST присылать `.../outlook/responseschema/2006a`.
-- [x] Autodiscover `User`: добавлен `AutoDiscoverSMTPAddress`; `LegacyDN`/`DeploymentId`/`MicrosoftOnline` не добавляем — это Exchange-специфичные поля, Outlook для IMAP их допускает (проверить в ручной матрице).
-- [ ] Rate limiting: token bucket на IP или лимиты на ingress для `/autodiscover/*` и `/mail/*`; защита от флуда и усиления памяти.
-- [x] `X-Request-ID`: принимается только `^[A-Za-z0-9._-]{1,64}$`, иначе генерируется; проброс в `context` для логов и ответный заголовок — покрыто тестами.
-- [x] Ошибки рендеринга (`marshalXML`/`marshalPlist`) логируются с `request_id`/host/path; клиенту — только `500 internal server error`.
-- [x] `http.Server.MaxHeaderBytes` = 16 KiB для основного и pprof-listener.
-- [ ] `Cache-Control: no-store` для Outlook-ответа с email.
-- [ ] Заголовки безопасности: HSTS на прокси, `X-Content-Type-Options: nosniff` уже есть; добавить `Referrer-Policy: no-referrer` на случай ошибок.
+- [ ] TLS-терминация, HSTS, HTTP→HTTPS redirect; валидные сертификаты на `autodiscover.*`, `autoconfig.*`, bare-domain.
+- [ ] DNS: CNAME/A, `_autodiscover._tcp`, `_imaps._tcp`, `_submission._tcp`/`_submissions._tcp`; DNSSEC/TLSA при возможности.
+- [ ] Microsoft RCA (Outlook Autodiscover + Outlook Connectivity) перед релизом.
+- [ ] Минимальный ручной smoke: Outlook desktop, Thunderbird, iOS/macOS; результаты в `docs/compat.md`.
+- [ ] Подписанный Apple-профиль (если нужен) и проверка установки.
+- [ ] Canary: один домен, затем второй; rollback-план; удаление старого Node-сервиса.
 
-### 10.3. P2 — полнота протоколов, диагностика, наблюдаемость
+### 10.4. Этап D — после выката (P3)
 
-- [x] **pprof**: отдельный admin-listener `pprof_listen` (по умолчанию выключен; `AUTOCONFIG_PPROF=1` → `127.0.0.1:6060`), отдельный `http.Server` с таймаутами и `MaxHeaderBytes`; non-loopback bind отвергается; в публичный mux не монтируется; тесты на admin 200 и public 404; README обновлён.
-- [ ] Autodiscover v2 JSON (`/autodiscover/autodiscover.json`): исследовать официальную схему и, если нужна новым Outlook/mobile, отдавать статический JSON (Protocol/AccountType/Authentication/EmailAddress/Host/Port/SSL/Username).
-- [ ] Apple payload: `SMIMEEncryptionEnabled`, `SMIMESigningEnabled`, `allowMailDrop`; убрать не входящий в схему `HasRemovalPasscode`; `PayloadVersion` внутреннего payload — integer, не real; `PayloadUUID`/`PayloadIdentifier` детерминированно на домен (сейчас статические константы для всех доменов).
-- [ ] Thunderbird: конфигурируемые `socketType` (`SSL`/`STARTTLS`, при необходимости `plain`) и `authentication` (сейчас только `password-cleartext`).
-- [ ] Брендинг на домен: `displayName`/`displayShortName` Thunderbird, `PayloadOrganization`/`EmailAccountDescription` Apple; сейчас подставляется `%EMAILADDRESS%`/домен.
-- [ ] Fuzz-тесты: `Host`, Outlook XML body, plist-поля; `go test -fuzz=Fuzz -fuzztime=30s`.
-- [ ] Наблюдаемость: `/version` (`debug.ReadBuildInfo`), счётчики запросов/ошибок (Prometheus) — опционально.
-- [ ] При добавлении метрик на основной mux реализовать `http.Flusher`/`Hijacker` в `statusRecorder` (pprof уже на отдельном listener).
-- [ ] Runbook по DNS/TLS и приватности: какие SRV/CNAME, TLS 1.2+, сроки хранения логов.
-
-### 10.4. P3 — улучшения
-
-- [ ] Hot reload конфига по SIGHUP (сейчас только рестарт).
-- [ ] SOAP Autodiscover (`.svc`) — явный `400` и документация «не поддерживается» (сейчас 404).
-- [ ] Подписанные Apple-профили (сейчас unsigned; установка даёт предупреждение).
-- [ ] `socketType=plain` для Thunderbird (не рекомендуется RFC 8314).
-- [ ] Бенчмарки рендеринга и маршрутизации.
-- [ ] Единый формат ошибок (`application/problem+json`) — только если появится API.
+- [ ] Autodiscover v2 JSON, если подтвердится потребность новым Outlook/mobile.
+- [ ] Метрики, алерты, retention логов.
+- [ ] Hot reload конфига по SIGHUP.
+- [ ] Бенчмарки рендеринга/маршрутизации.
+- [ ] Единый формат ошибок (`application/problem+json`), если появится API.
 
 ### 10.5. Соответствие протоколам
 
@@ -370,9 +413,9 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | 6 | `User/LegacyDN`, `AutoDiscoverSMTPAddress`, `DeploymentId` (XSD) | [x] `AutoDiscoverSMTPAddress`; `LegacyDN`/`DeploymentId` — осознанное отклонение |
 | 7 | `Account/AccountType=email`, `Action=settings` | [x] |
 | 8 | `Protocol`: Type, TTL, Server, Port, LoginName, DomainRequired, DomainName, SPA, TLS/SSL, AuthRequired | [x] |
-| 9 | Unauthenticated GET → `302` на HTTPS (phase 3 MS) | [ ] (P2; сейчас 400, если прокси не редиректит) |
-| 10 | Autodiscover v2 JSON | [ ] исследование/реализация (P2) |
-| 11 | SOAP `.svc` | N/A; [ ] явный 400 + docs (P3) |
+| 9 | Unauthenticated GET → `302` на HTTPS (phase 3 MS) | [ ] этап C (прокси/ingress) |
+| 10 | Autodiscover v2 JSON | [ ] исследование (этап D; нужен официальный контракт) |
+| 11 | SOAP `.svc` | [x] явный 400; документация в README |
 | 12 | HTTPS + доверенный сертификат | [ ] деплой (P0) |
 
 #### Thunderbird (Mozilla ConfigFileFormat)
@@ -381,12 +424,12 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 |---|---|---|
 | 1 | `GET /mail/config-v1.1.xml` | [x] |
 | 2 | `GET /.well-known/autoconfig/mail/config-v1.1.xml` | [x] |
-| 3 | `?emailaddress=` опционален, не обязателен | [x] игнорируется, не логируется; [ ] тест (P3) |
+| 3 | `?emailaddress=` опционален, не обязателен | [x] игнорируется, не логируется; тест |
 | 4 | `clientConfig version=1.1`, `emailProvider id`, `domain` | [x] |
 | 5 | `displayName`/`displayShortName` с плейсхолдерами | [x] |
 | 6 | `incomingServer`/`outgoingServer`: type, hostname, port, socketType, authentication, username | [x] |
-| 7 | `socketType`: `SSL`/`STARTTLS`/`plain` | [x] SSL/STARTTLS; [ ] plain (P3, discouraged) |
-| 8 | `authentication`: password-cleartext и др. | [x] password-cleartext; [ ] конфигурируемость (P2) |
+| 7 | `socketType`: `SSL`/`STARTTLS`/`plain` | [x] конфигурируется, дефолт из `starttls` |
+| 8 | `authentication`: password-cleartext и др. | [x] конфигурируется, allowlist значений |
 | 9 | HTTPS + проверка домена/сертификата | [ ] деплой (P0) |
 | 10 | SRV `_imaps._tcp`, `_submission(s)._tcp` (RFC 6186/8314) | [ ] runbook (P2) |
 
@@ -397,10 +440,10 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | 1 | `PayloadType=com.apple.mail.managed`, `EmailTypeIMAP` | [x] |
 | 2 | Обязательные: account type, user display name, email, host, port, username, auth | [x] |
 | 3 | `Use SSL` соответствует implicit TLS | [x] `!STARTTLS` |
-| 4 | Опциональные S/MIME и MailDrop ключи | [ ] (P2) |
-| 5 | `PayloadVersion` — integer | [ ] сейчас `<real>` (P2) |
-| 6 | Уникальные `PayloadUUID`/`PayloadIdentifier` на домен | [ ] сейчас статические (P2) |
-| 7 | Отсутствие не входящего в схему `HasRemovalPasscode` | [ ] (P2) |
+| 4 | Опциональные S/MIME и MailDrop ключи | [x] |
+| 5 | `PayloadVersion` — integer | [x] |
+| 6 | Уникальные `PayloadUUID`/`PayloadIdentifier` на домен | [x] UUIDv5 на домен |
+| 7 | Отсутствие не входящего в схему `HasRemovalPasscode` | [x] удалён |
 | 8 | `Content-Type: application/x-apple-aspen-config` + attachment | [x] |
 | 9 | Подпись профиля | [ ] (P3) |
 | 10 | Статический `user@<domain>` | [x], требует ручной правки; альтернатива — MDM |
@@ -420,40 +463,42 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [ ] Вынести `newServer(cfg)`/middleware в тестируемый конструктор (сейчас `run()` в `package main`) — P3.
 - [x] `statusRecorder` не реализует `http.Flusher`/`Hijacker`; pprof вынесен на отдельный listener, поэтому риск снят. Для метрик на основном mux — P2.
 - [x] 5xx рендеринга логируются с `request_id`.
-- [ ] Нет метрик/версии/build info — P2/P3.
-- [ ] Нет rate limiting — P1.
+- [x] `/version` с build info.
+- [ ] Нет метрик — этап D (опционально).
+- [x] Rate limiting на клиентский IP (опционально, `rate_limit_per_minute`).
 - [ ] Нет hot reload конфига — P3 (документировать рестарт).
-- [ ] Нет Dockerfile/CI — P0.
+- [ ] Нет Dockerfile/CI — этап B.
 
 ### 10.7. Безопасность по регламентам
 
 | Регламент | Пункт | Статус |
 |---|---|---|
 | OWASP Top 10 2021 | A03 Injection: XML/plist escaping, allowlist | [x] |
-| OWASP Top 10 2021 | A03 Injection: fuzz Host/body/plist | [ ] P2 |
+| OWASP Top 10 2021 | A03 Injection: fuzz Host/Outlook body | [x] |
 | OWASP Top 10 2021 | A04 Insecure design: body limit, timeouts | [x] |
-| OWASP Top 10 2021 | A04 Insecure design: rate limiting | [ ] P1 |
+| OWASP Top 10 2021 | A04 Insecure design: rate limiting | [x] |
 | OWASP Top 10 2021 | A05 Misconfig: строгий JSON, Apple off by default | [x] |
-| OWASP Top 10 2021 | A05 Misconfig: HSTS/security headers/TLS | [ ] P0/P2 |
+| OWASP Top 10 2021 | A05 Misconfig: security headers | [x] |
+| OWASP Top 10 2021 | A05 Misconfig: HSTS/TLS на стенде | [ ] этап C |
 | OWASP Top 10 2021 | A06 Vulnerable components: zero deps + govulncheck | [x] |
-| OWASP Top 10 2021 | A06/A08: CI, Dependabot, SBOM, signing | [ ] P0 |
+| OWASP Top 10 2021 | A06/A08: CI, Dependabot, SBOM, signing | [ ] этап B |
 | OWASP Top 10 2021 | A09 Logging: без PII, request_id | [x] |
 | OWASP Top 10 2021 | A09 Logging: мониторинг/алерты/retention | [ ] P2 |
 | OWASP Top 10 2021 | A10 SSRF: исходящих запросов нет | [x] |
 | OWASP ASVS 4.0 | V5 validation, V6 encoding, V14 config | [x] |
 | OWASP ASVS 4.0 | V7 errors/logging (5xx логируются с request_id) | [x] |
-| OWASP ASVS 4.0 | V9 communications (TLS/HSTS/сертификаты) | [ ] P0 |
+| OWASP ASVS 4.0 | V9 communications (TLS/HSTS/сертификаты) | [ ] этап C |
 | OWASP ASVS 4.0 | V14 config: pprof только loopback, отдельный listener | [x] |
 | Go security | govulncheck, staticcheck, timeouts, MaxBytesReader, crypto/rand, без unsafe | [x] |
-| Go security | fuzz-тесты парсеров | [ ] P2 |
-| CIS Docker Benchmark | non-root, read-only, cap_drop, no shell, limits | [ ] P0 |
+| Go security | fuzz-тесты Host/Outlook body | [x] |
+| CIS Docker Benchmark | non-root, read-only, cap_drop, no shell, limits | [ ] этап B |
 | SLSA / supply chain | пин toolchain, пустой граф зависимостей | [x] |
-| SLSA / supply chain | SBOM, provenance, cosign, digest-пиннинг | [ ] P0 |
-| RFC 8314 | TLS 1.2+, приоритет implicit TLS | [ ] P0 (TLS) / P2 (docs) |
-| Mozilla Autoconfig Security | HTTPS + проверка сертификата | [ ] P0 |
+| SLSA / supply chain | SBOM, provenance, cosign, digest-пиннинг | [ ] этап B |
+| RFC 8314 | TLS 1.2+, приоритет implicit TLS | [ ] этап C |
+| Mozilla Autoconfig Security | HTTPS + проверка сертификата | [ ] этап C |
 | Privacy/GDPR | нет хранения данных, нет PII в логах | [x] |
 | Privacy/GDPR | retention/политика логов | [ ] P2 |
-| Microsoft Autodiscover | HTTPS + доверенный сертификат до отправки учётных данных | [ ] P0 |
+| Microsoft Autodiscover | HTTPS + доверенный сертификат до отправки учётных данных | [ ] этап C |
 
 ### 10.8. Автоматизация матрицы клиентов
 

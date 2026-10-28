@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/xml"
 	"strconv"
 
@@ -132,12 +134,17 @@ type mailServer struct {
 }
 
 func buildClientConfig(d config.Domain, domain string) clientConfigDoc {
+	displayName := d.DisplayName
+	if displayName == "" {
+		displayName = "%EMAILADDRESS%"
+	}
+
 	return clientConfigDoc{
 		Version: "1.1",
 		Provider: emailProvider{
 			ID:               domain,
 			Domain:           domain,
-			DisplayName:      "%EMAILADDRESS%",
+			DisplayName:      displayName,
 			DisplayShortName: "%EMAILLOCALPART%",
 			Incoming:         buildMailServer("imap", d.IMAP),
 			Outgoing:         buildMailServer("smtp", d.SMTP),
@@ -146,9 +153,17 @@ func buildClientConfig(d config.Domain, domain string) clientConfigDoc {
 }
 
 func buildMailServer(kind string, s config.Server) mailServer {
-	socketType := "SSL"
-	if s.STARTTLS {
-		socketType = "STARTTLS"
+	socketType := s.SocketType
+	if socketType == "" {
+		socketType = "SSL"
+		if s.STARTTLS {
+			socketType = "STARTTLS"
+		}
+	}
+
+	authentication := s.Authentication
+	if authentication == "" {
+		authentication = "password-cleartext"
 	}
 
 	return mailServer{
@@ -156,7 +171,7 @@ func buildMailServer(kind string, s config.Server) mailServer {
 		Hostname:       s.Host,
 		Port:           s.Port,
 		SocketType:     socketType,
-		Authentication: "password-cleartext",
+		Authentication: authentication,
 		Username:       "%EMAILADDRESS%",
 	}
 }
@@ -236,12 +251,6 @@ func (v plistInteger) writeValue(e *xml.Encoder) error {
 	return writeText(e, "integer", strconv.Itoa(int(v)))
 }
 
-type plistReal string
-
-func (v plistReal) writeValue(e *xml.Encoder) error {
-	return writeText(e, "real", string(v))
-}
-
 type plistBool bool
 
 func (v plistBool) writeValue(e *xml.Encoder) error {
@@ -295,27 +304,55 @@ func buildAppleProfile(d config.Domain, domain string) plistDocument {
 		{key: "OutgoingPasswordSameAsIncomingPassword", val: plistBool(true)},
 		{key: "PayloadDescription", val: plistString("Configure Email Settings")},
 		{key: "PayloadDisplayName", val: plistString(email)},
-		{key: "PayloadIdentifier", val: plistString("com.l11r.goautoconfig.com.apple.mail.managed.7A981A9E-D5D0-4EF8-87FE-39FD6A506FAC")},
+		{key: "PayloadIdentifier", val: plistString("com.l11r.goautoconfig.com.apple.mail.managed." + domain)},
 		{key: "PayloadType", val: plistString("com.apple.mail.managed")},
-		{key: "PayloadUUID", val: plistString("7A981A9E-D5D0-4EF8-87FE-39FD6A506FAC")},
-		{key: "PayloadVersion", val: plistReal("1")},
+		{key: "PayloadUUID", val: plistString(uuidV5("mail:" + domain))},
+		{key: "PayloadVersion", val: plistInteger(1)},
 		{key: "SMIMEEnablePerMessageSwitch", val: plistBool(false)},
 		{key: "SMIMEEnabled", val: plistBool(false)},
+		{key: "SMIMEEncryptionEnabled", val: plistBool(false)},
+		{key: "SMIMESigningEnabled", val: plistBool(false)},
+		{key: "allowMailDrop", val: plistBool(false)},
 		{key: "disableMailRecentsSyncing", val: plistBool(false)},
 	}
 
+	organization := d.DisplayName
+	if organization == "" {
+		organization = domain
+	}
+
 	return plistDocument{dict: plistDict{
-		{key: "HasRemovalPasscode", val: plistBool(false)},
 		{key: "PayloadContent", val: plistArray{account}},
 		{key: "PayloadDescription", val: plistString("Configure Email Settings")},
 		{key: "PayloadDisplayName", val: plistString(email)},
-		{key: "PayloadIdentifier", val: plistString("com.l11r.goautoconfig")},
-		{key: "PayloadOrganization", val: plistString(domain)},
+		{key: "PayloadIdentifier", val: plistString("com.l11r.goautoconfig." + domain)},
+		{key: "PayloadOrganization", val: plistString(organization)},
 		{key: "PayloadRemovalDisallowed", val: plistBool(false)},
 		{key: "PayloadType", val: plistString("Configuration")},
-		{key: "PayloadUUID", val: plistString("48C88203-4DB9-49E8-B593-4831903605A0")},
+		{key: "PayloadUUID", val: plistString(uuidV5("profile:" + domain))},
 		{key: "PayloadVersion", val: plistInteger(1)},
 	}}
+}
+
+var uuidNamespaceDNS = [16]byte{
+	0x6b, 0xa7, 0xb8, 0x10, 0x9d, 0xad, 0x11, 0xd1,
+	0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+}
+
+func uuidV5(name string) string {
+	h := sha1.New()
+	h.Write(uuidNamespaceDNS[:])
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+
+	var u [16]byte
+	copy(u[:], sum[:16])
+	u[6] = (u[6] & 0x0f) | 0x50
+	u[8] = (u[8] & 0x3f) | 0x80
+
+	s := hex.EncodeToString(u[:])
+
+	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
 }
 
 func marshalXML(v any) ([]byte, error) {

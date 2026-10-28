@@ -8,11 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,9 +56,11 @@ func run() error {
 		return err
 	}
 
+	limiter := newRateLimiter(conf.RateLimit, conf.TrustProxy)
+
 	srv := &http.Server{
 		Addr:              conf.Listen,
-		Handler:           logging(recoverPanics(handlers.NewRouter(conf))),
+		Handler:           securityHeaders(logging(recoverPanics(limiter.middleware(handlers.NewRouter(conf))))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -143,6 +148,109 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	}
 
 	return r.ResponseWriter.Write(b)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+type rateWindow struct {
+	start time.Time
+	count int
+}
+
+type rateLimiter struct {
+	limit      int
+	trustProxy bool
+	requests   uint64
+
+	mu      sync.Mutex
+	clients map[string]*rateWindow
+}
+
+func newRateLimiter(limit int, trustProxy bool) *rateLimiter {
+	if limit <= 0 {
+		return nil
+	}
+
+	return &rateLimiter{
+		limit:      limit,
+		trustProxy: trustProxy,
+		clients:    make(map[string]*rateWindow),
+	}
+}
+
+func (l *rateLimiter) middleware(next http.Handler) http.Handler {
+	if l == nil {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !l.allow(clientIP(r, l.trustProxy), time.Now()) {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (l *rateLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.requests++
+	if l.requests%1024 == 0 {
+		l.cleanup(now)
+	}
+
+	window, ok := l.clients[key]
+	if !ok || now.Sub(window.start) >= time.Minute {
+		l.clients[key] = &rateWindow{start: now, count: 1}
+		return true
+	}
+	if window.count >= l.limit {
+		return false
+	}
+	window.count++
+
+	return true
+}
+
+func (l *rateLimiter) cleanup(now time.Time) {
+	for key, window := range l.clients {
+		if now.Sub(window.start) >= 2*time.Minute {
+			delete(l.clients, key)
+		}
+	}
+}
+
+func clientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			first, _, _ := strings.Cut(forwarded, ",")
+			if ip := net.ParseIP(strings.TrimSpace(first)); ip != nil {
+				return ip.String()
+			}
+		}
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
 }
 
 func logging(next http.Handler) http.Handler {

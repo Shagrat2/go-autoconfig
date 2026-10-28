@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"io"
@@ -358,6 +359,128 @@ func TestStartTLS(t *testing.T) {
 	ol := doRequest(t, cfg, http.MethodPost, "/autodiscover/autodiscover.xml", "autodiscover.example.com", outlookRequest)
 	if !strings.Contains(ol.Body.String(), "<TLS>on</TLS>") {
 		t.Errorf("outlook response has no TLS:\n%s", ol.Body.String())
+	}
+}
+
+func TestThunderbirdOptions(t *testing.T) {
+	cfg := testConfig()
+	cfg.Domains["example.com"] = config.Domain{
+		DisplayName: "Example Mail",
+		IMAP:        config.Server{Host: "imap.example.com", Port: 143, SocketType: "STARTTLS", Authentication: "OAuth2"},
+		SMTP:        config.Server{Host: "smtp.example.com", Port: 587, SocketType: "plain", Authentication: "password-encrypted"},
+	}
+
+	rec := doRequest(t, cfg, http.MethodGet, "/mail/config-v1.1.xml", "autoconfig.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<displayName>Example Mail</displayName>`,
+		`<socketType>STARTTLS</socketType>`,
+		`<authentication>OAuth2</authentication>`,
+		`<socketType>plain</socketType>`,
+		`<authentication>password-encrypted</authentication>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("response does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestApplePayloadCompleteness(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableApple = true
+	cfg.Domains["example.com"] = config.Domain{
+		DisplayName: "Example Mail",
+		IMAP:        config.Server{Host: "imap.example.com", Port: 993},
+		SMTP:        config.Server{Host: "smtp.example.com", Port: 465},
+	}
+
+	rec := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	assertWellFormedXML(t, body)
+
+	if strings.Contains(body, "HasRemovalPasscode") {
+		t.Errorf("response contains non-schema HasRemovalPasscode:\n%s", body)
+	}
+	for _, key := range []string{"SMIMEEncryptionEnabled", "SMIMESigningEnabled", "allowMailDrop"} {
+		if got := readPlistValue(t, body, key); got != "false" {
+			t.Errorf("%s = %q, want false", key, got)
+		}
+	}
+	if got := readPlistValue(t, body, "PayloadVersion"); got != "1" {
+		t.Errorf("PayloadVersion = %q, want 1", got)
+	}
+	if got := readPlistValue(t, body, "PayloadOrganization"); got != "Example Mail" {
+		t.Errorf("PayloadOrganization = %q, want Example Mail", got)
+	}
+}
+
+func TestAppleUUIDPerDomain(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableApple = true
+	cfg.Domains["voronko.de"] = config.Domain{
+		IMAP: config.Server{Host: "mail.voronko.de", Port: 993},
+		SMTP: config.Server{Host: "mail.voronko.de", Port: 587, STARTTLS: true},
+	}
+
+	first := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.example.com", "").Body.String()
+	second := doRequest(t, cfg, http.MethodGet, "/email.mobileconfig", "autoconfig.voronko.de", "").Body.String()
+
+	uuid1 := readPlistValue(t, first, "PayloadUUID")
+	uuid2 := readPlistValue(t, second, "PayloadUUID")
+	if uuid1 == uuid2 {
+		t.Fatalf("PayloadUUID is the same for both domains: %q", uuid1)
+	}
+	if len(uuid1) != 36 || uuid1[14] != '5' {
+		t.Errorf("PayloadUUID %q is not a UUIDv5", uuid1)
+	}
+}
+
+func TestSOAPNotSupported(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodPost, "/autodiscover/autodiscover.svc", "autodiscover.example.com",
+		`<Autodiscover><Request><EMailAddress>user@example.com</EMailAddress></Request></Autodiscover>`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestVersion(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodGet, "/version", "example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal version: %v", err)
+	}
+	if got["version"] == "" || got["go"] == "" {
+		t.Errorf("version response = %v", got)
+	}
+}
+
+func TestThunderbirdIgnoresEmailQuery(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodGet, "/mail/config-v1.1.xml?emailaddress=attacker@evil.test", "autoconfig.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if strings.Contains(rec.Body.String(), "attacker@evil.test") {
+		t.Fatalf("query address leaked into response:\n%s", rec.Body.String())
+	}
+}
+
+func TestCacheControlNoStore(t *testing.T) {
+	rec := doRequest(t, testConfig(), http.MethodGet, "/mail/config-v1.1.xml", "autoconfig.example.com", "")
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 }
 

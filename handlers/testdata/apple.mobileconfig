@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 	<dict>
-		<key>HasRemovalPasscode</key>
-		<false></false>
 		<key>PayloadContent</key>
 		<array>
 			<dict>
@@ -42,16 +40,22 @@
 				<key>PayloadDisplayName</key>
 				<string>user@example.com</string>
 				<key>PayloadIdentifier</key>
-				<string>com.l11r.goautoconfig.com.apple.mail.managed.7A981A9E-D5D0-4EF8-87FE-39FD6A506FAC</string>
+				<string>com.l11r.goautoconfig.com.apple.mail.managed.example.com</string>
 				<key>PayloadType</key>
 				<string>com.apple.mail.managed</string>
 				<key>PayloadUUID</key>
-				<string>7A981A9E-D5D0-4EF8-87FE-39FD6A506FAC</string>
+				<string>69d67b73-d0ec-59ed-b3cb-e4e8c07b3a1c</string>
 				<key>PayloadVersion</key>
-				<real>1</real>
+				<integer>1</integer>
 				<key>SMIMEEnablePerMessageSwitch</key>
 				<false></false>
 				<key>SMIMEEnabled</key>
+				<false></false>
+				<key>SMIMEEncryptionEnabled</key>
+				<false></false>
+				<key>SMIMESigningEnabled</key>
+				<false></false>
+				<key>allowMailDrop</key>
 				<false></false>
 				<key>disableMailRecentsSyncing</key>
 				<false></false>
@@ -62,7 +66,7 @@
 		<key>PayloadDisplayName</key>
 		<string>user@example.com</string>
 		<key>PayloadIdentifier</key>
-		<string>com.l11r.goautoconfig</string>
+		<string>com.l11r.goautoconfig.example.com</string>
 		<key>PayloadOrganization</key>
 		<string>example.com</string>
 		<key>PayloadRemovalDisallowed</key>
@@ -70,7 +74,7 @@
 		<key>PayloadType</key>
 		<string>Configuration</string>
 		<key>PayloadUUID</key>
-		<string>48C88203-4DB9-49E8-B593-4831903605A0</string>
+		<string>074a6d9d-847e-57a7-beca-c2eea27df4b9</string>
 		<key>PayloadVersion</key>
 		<integer>1</integer>
 	</dict>

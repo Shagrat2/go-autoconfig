@@ -13,19 +13,24 @@ import (
 type Config struct {
 	Listen      string            `json:"listen"`
 	PprofListen string            `json:"pprof_listen"`
+	RateLimit   int               `json:"rate_limit_per_minute"`
+	TrustProxy  bool              `json:"trust_proxy"`
 	EnableApple bool              `json:"enable_apple"`
 	Domains     map[string]Domain `json:"domains"`
 }
 
 type Domain struct {
-	IMAP Server `json:"imap"`
-	SMTP Server `json:"smtp"`
+	DisplayName string `json:"display_name"`
+	IMAP        Server `json:"imap"`
+	SMTP        Server `json:"smtp"`
 }
 
 type Server struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	STARTTLS bool   `json:"starttls"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	STARTTLS       bool   `json:"starttls"`
+	SocketType     string `json:"socket_type"`
+	Authentication string `json:"authentication"`
 }
 
 func NewConfig(p string) (*Config, error) {
@@ -69,6 +74,10 @@ func (c *Config) normalize() error {
 		}
 	}
 
+	if c.RateLimit < 0 {
+		return fmt.Errorf("config: rate_limit_per_minute must be >= 0")
+	}
+
 	if len(c.Domains) == 0 {
 		return fmt.Errorf("config: at least one domain is required")
 	}
@@ -82,10 +91,14 @@ func (c *Config) normalize() error {
 		if _, ok := domains[key]; ok {
 			return fmt.Errorf("config: duplicate domain %q", key)
 		}
-		if err := validateServer("imap", d.IMAP); err != nil {
+		d.DisplayName = strings.TrimSpace(d.DisplayName)
+		if strings.ContainsAny(d.DisplayName, "\r\n\t") {
+			return fmt.Errorf("config: domain %q: display_name contains control characters", key)
+		}
+		if err := validateServer("imap", &d.IMAP); err != nil {
 			return fmt.Errorf("config: domain %q: %w", key, err)
 		}
-		if err := validateServer("smtp", d.SMTP); err != nil {
+		if err := validateServer("smtp", &d.SMTP); err != nil {
 			return fmt.Errorf("config: domain %q: %w", key, err)
 		}
 		domains[key] = d
@@ -130,12 +143,40 @@ func validDomainName(name string) bool {
 	return true
 }
 
-func validateServer(kind string, s Server) error {
+var socketTypes = map[string]string{
+	"ssl":      "SSL",
+	"starttls": "STARTTLS",
+	"plain":    "plain",
+}
+
+var authentications = map[string]bool{
+	"password-cleartext": true,
+	"password-encrypted": true,
+	"NTLM":               true,
+	"GSSAPI":             true,
+	"client-IP-address":  true,
+	"TLS-client-cert":    true,
+	"OAuth2":             true,
+	"none":               true,
+}
+
+func validateServer(kind string, s *Server) error {
 	if s.Host == "" || strings.TrimSpace(s.Host) != s.Host || strings.ContainsAny(s.Host, " \t\r\n/:") {
 		return fmt.Errorf("%s: invalid host %q", kind, s.Host)
 	}
 	if s.Port < 1 || s.Port > 65535 {
 		return fmt.Errorf("%s: port %d out of range 1..65535", kind, s.Port)
+	}
+
+	if s.SocketType != "" {
+		v, ok := socketTypes[strings.ToLower(s.SocketType)]
+		if !ok {
+			return fmt.Errorf("%s: invalid socket_type %q", kind, s.SocketType)
+		}
+		s.SocketType = v
+	}
+	if s.Authentication != "" && !authentications[s.Authentication] {
+		return fmt.Errorf("%s: invalid authentication %q", kind, s.Authentication)
 	}
 
 	return nil
