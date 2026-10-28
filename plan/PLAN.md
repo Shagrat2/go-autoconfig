@@ -3,7 +3,7 @@
 **Fork:** https://github.com/Shagrat2/go-autoconfig  
 **Upstream:** https://github.com/savely-krasovsky/go-autoconfig  
 **Базовая версия:** upstream `master` (Go 1.18, Echo 4.11.1)  
-**Статус:** план закрыт 2026-10-28. Phase 1–3, этапы A–C выполнены; сервис развёрнут и проверен, остаточные риски зафиксированы в разделе 12.  
+**Статус:** план закрыт 2026-10-28. Phase 1–3, этапы A–C выполнены; сервис развёрнут и проверен. PR: https://github.com/Shagrat2/go-autoconfig/pull/1  
 **Дата:** 2026-10-28
 
 ---
@@ -535,7 +535,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [x] Apple STARTTLS — покрыт тестом; ручная проверка iOS/macOS отменена вместе с матрицей.
 - [x] Outlook 2016/2019/365 — ручная матрица отменена решением 2026-10-28.
 - [x] pprof доступен только на loopback/admin-listener.
-- [x] `govulncheck`/`staticcheck`/`go test -race` зелёные локально; CI запускается на PR.
+- [x] `govulncheck`/`staticcheck`/`go test -race` — локально и в CI PR #1 (test + docker pass).
 - [x] Runbook по TLS/DNS/логам и `docs/compat.md` заполнены (HTTP/RCA; ручная матрица отменена).
 
 ---
@@ -592,7 +592,9 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 ## 12. Закрытие плана (2026-10-28)
 
-План закрыт. Что принято:
+План закрыт. PR: https://github.com/Shagrat2/go-autoconfig/pull/1 (CI: test/docker pass, mergeable).
+
+Что принято:
 
 - сервис `go-autoconfig` 1.0.0 развёрнут на трёх площадках, образы лежат в приватных реестрах и запинены по digest;
 - landing page `/`, Outlook POX, Thunderbird, Apple-гейт, health/version, лимит тела, таймауты и graceful shutdown проверены;
