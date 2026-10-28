@@ -194,7 +194,7 @@
 - [x] GitHub Actions: `go test -race`, `go vet`, `staticcheck`, `govulncheck`, fuzz smoke, `docker build` + container smoke.
 - [x] Dependabot для Go modules, Actions и Docker.
 - [x] `SECURITY.md` с политикой отчетности.
-- [x] SBOM как артефакт CI; подпись/provenance — отдельная задача релиза.
+- [x] SBOM как внутренний артефакт CI; подпись/provenance не требуется — образы не распространяются, реестры приватные.
 
 **Deliverable:** воспроизводимый образ и CI, который ловит регрессии.
 
@@ -297,7 +297,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 
 Обозначения: `[x]` — сделано, `[ ]` — todo. Порядок работ: **A (код) → B (сборка) → C (выкат) → D (после выката)**.
 
-Текущий статус: этапы A–C закрыты (кроме подписи/provenance, Autodiscover v2 JSON, RCA и ручного smoke на реальных клиентах).
+Текущий статус: этапы A–C закрыты. Остаётся `Outlook Connectivity` RCA (нужен тестовый ящик) и опциональные CI-проверки.
 
 ### 10.1. Этап A — весь код (до сборки)
 
@@ -365,7 +365,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 - [ ] CI: `xmllint --schema` по адаптированному IMAP-профилю MS-OXDSCLI XSD (строгий Exchange-XSD не подходит).
 - [x] Dependabot для Go, Actions и Docker.
 - [x] SBOM (anchore/sbom-action) как артефакт CI.
-- [ ] Подпись образа (cosign) и provenance — нужен registry/release workflow.
+- [x] Подпись/provenance — не требуется: образы не распространяются, приватные реестры доверенные.
 - [x] `SECURITY.md`.
 
 ### 10.3. Этап C — выкат и приёмка
@@ -487,7 +487,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | OWASP Top 10 2021 | A05 Misconfig: HSTS/TLS на стенде | [ ] этап C |
 | OWASP Top 10 2021 | A06 Vulnerable components: zero deps + govulncheck | [x] |
 | OWASP Top 10 2021 | A06/A08: CI, Dependabot, SBOM | [x] |
-| OWASP Top 10 2021 | A08: подпись образа/provenance | [ ] нужен registry |
+| OWASP Top 10 2021 | A08: подпись образа/provenance | [x] N/A: приватные реестры, образы не распространяются |
 | OWASP Top 10 2021 | A09 Logging: без PII, request_id | [x] |
 | OWASP Top 10 2021 | A09 Logging: мониторинг/алерты/retention | [ ] P2 |
 | OWASP Top 10 2021 | A10 SSRF: исходящих запросов нет | [x] |
@@ -500,7 +500,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 | CIS Docker Benchmark | non-root, read-only, cap_drop, no shell, limits | [x] CI smoke |
 | SLSA / supply chain | пин toolchain, пустой граф зависимостей | [x] |
 | SLSA / supply chain | SBOM, digest-пиннинг | [x] |
-| SLSA / supply chain | provenance, cosign | [ ] нужен registry |
+| SLSA / supply chain | provenance, cosign | [x] N/A: приватные реестры |
 | RFC 8314 | TLS 1.2+, приоритет implicit TLS | [ ] этап C |
 | Mozilla Autoconfig Security | HTTPS + проверка сертификата | [ ] этап C |
 | Privacy/GDPR | нет хранения данных, нет PII в логах | [x] |
@@ -557,7 +557,7 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
 2. [x] Ручная матрица клиентов — **не делаем** для 1.0.0 (решение); HTTP-level проверки в `docs/compat.md`.
 3. [x] SRV-записи — **не делаем** (решение); A/HTTPS работают, клиенты используют `autoconfig.*`/`autodiscover.*`.
 4. [x] Закоммитить изменения и поставить тег `v1.0.0`.
-5. [ ] Подпись образа: keyless cosign через GitHub Actions OIDC (identity = workflow/org), либо ключ в CI-секрете. Требует `id-token: write` и поддержки OCI-подписей реестром. Подробнее — 11.5.
+5. [x] Подпись образа — **не делаем**: образы не распространяются, приватные реестры доверенные. Решение и условия пересмотра — 11.5.
 6. [x] Autodiscover v2 JSON — исследовано: официальной публичной схемы нет; v2 возвращает только URL для EWS/ActiveSync, IMAP/SMTP остаются в v1. Не реализуем (см. 11.4).
 7. [ ] CI XSD-профиль, nightly DNS/SRV/TLS; метрики/retention, hot reload — опционально.
 8. [x] Canary не выполнялся: развёртывание сразу на трёх площадках; rollback-артефакты сохранены.
@@ -576,15 +576,14 @@ docker run --rm -p 8080:8080 -v "$PWD/config.example.json:/etc/autoconfig/config
   - <https://docs.grommunio.com/man/autodiscover.7.html> (third-party, пример формата)
 - Решение: для IMAP/SMTP v2 JSON не реализуем; POX v1 покрывает Outlook desktop. Если появится официальный контракт для IMAP — вернуться к пункту.
 
-### 11.5. Подпись образа: кем и зачем
+### 11.5. Подпись образа — решение
 
-**Кем:** release-workflow GitHub Actions через keyless cosign (OIDC). Идентичность подписи — не человек, а workflow: `https://github.com/<org>/<repo>/.github/workflows/release.yml@refs/tags/v1.0.0`, issuer `https://token.actions.githubusercontent.com`. Сертификат короткоживущий, подпись фиксируется в Rekor. Альтернатива — cosign-ключ в CI-секрете/KMS: тогда identity = ключ, ротация и хранение на вас.
+Образы не распространяются: каждый собирает сам из этого репозитория (Dockerfile) или использует приватные реестры организации. Приватные реестры — доверенная зона, доступ защищён их аутентификацией.
 
-**Зачем:**
+Поэтому cosign/provenance **не делаем**:
 
-- доказать, что образ собран из этого репозитория/коммита, а не подменён в реестре;
-- admission policy (Kyverno/OPA/Gatekeeper) может отклонять неподписанные образы;
-- аудит цепочки поставки вместе с SBOM и provenance;
-- если утекут push-креды реестра, без CI-идентичности нельзя выпустить валидную подпись.
+- нет внешней дистрибуции, которую нужно заверять;
+- digest-пиннинг остаётся для воспроизводимости;
+- SBOM остаётся внутренним артефактом CI.
 
-**Требования:** `permissions: id-token: write`, push в реестр, поддержка OCI-подписей (для Docker Registry 3.0 проверить; иначе legacy tag-схема cosign или подпись артефактов в GitHub Release).
+Если политика изменится (публикация образа или внешние потребители) — вернуться к keyless cosign через GitHub Actions OIDC: identity workflow, `id-token: write`, Rekor.

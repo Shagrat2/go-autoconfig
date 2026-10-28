@@ -3,7 +3,7 @@ IMAP/SMTP autodiscover feature for Thunderbird, Apple Mail and Microsoft Outlook
 
 ## Status
 
-Release `1.0.0` (linux/amd64, digest-pinned) is deployed and verified at the HTTP level on three independent sites: landing page, health/version, Thunderbird, Outlook POX, Apple-disabled, headers, unknown schema/host and the 1 MiB body limit. Microsoft RCA `SSL Server Test` passed on all three sites; `Outlook Connectivity` still needs a test mailbox password. Details: [docs/compat.md](docs/compat.md).
+Release `1.0.0` (linux/amd64, digest-pinned) is deployed and verified at the HTTP level on three independent sites: landing page, health/version, Thunderbird, Outlook POX, Apple-disabled, headers, unknown schema/host and the 1 MiB body limit. Prebuilt images are not distributed; build from this repository and push to your own registry. Microsoft RCA `SSL Server Test` passed on all three sites; `Outlook Connectivity` still needs a test mailbox password. Details: [docs/compat.md](docs/compat.md).
 
 DNS SRV records are recommended, but clients also try the `autoconfig.`/`autodiscover.` hosts directly:
 ```
@@ -56,6 +56,8 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
 ```
 
 The image is based on distroless, runs as `nonroot` and has no shell. The config is read from `/etc/autoconfig/config.json`; mount it read-only.
+
+Prebuilt images are not published. Build the image locally or in your own CI and push it to your registry; internal deployments pin the resulting digest.
 
 ## Configuration
 JSON file, one or more domains per instance:

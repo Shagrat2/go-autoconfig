@@ -18,6 +18,7 @@ Caddy routes by `Host`, so one instance serves every domain listed in `config.js
 - Ports 80 and 443 reachable from the internet (ACME HTTP-01 and clients).
 - A working mail server with IMAP/SMTP ports.
 - Docker with Compose.
+- A registry you control. Prebuilt images are not distributed: build from this repository and push to your registry; deployments pin the resulting digest.
 
 ## DNS
 
